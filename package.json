@@ -1,0 +1,26 @@
+{
+  "name": "backlog-md",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Claude Code plugin for the Backlog.md task manager",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test test/*/*.test.mjs",
+    "test:unit": "node --test test/unit/*.test.mjs",
+    "test:contract": "node --test test/contract/*.test.mjs",
+    "test:integration": "node --test test/integration/*.test.mjs",
+    "coverage": "node --test --experimental-test-coverage test/*/*.test.mjs",
+    "typecheck": "tsc -p jsconfig.json",
+    "lint": "biome check .",
+    "format": "biome check --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.10",
+    "@types/node": "24.9.2",
+    "typescript": "5.9.3"
+  }
+}

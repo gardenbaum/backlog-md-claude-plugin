@@ -1,0 +1,76 @@
+#!/bin/sh
+# backlog-md-plugin-hook v1
+#
+# One check: staged Backlog.md task files must still be readable by the CLI.
+# A gate fails open — anything uncertain here (no node, no plugin, no project)
+# exits 0 rather than blocking a commit.
+PLUGIN_ROOT_HINT='@@PLUGIN_ROOT@@'
+
+# Picks the newest of the cached install paths fed to it on stdin, comparing
+# the version directory names segment by segment as numbers. Missing segments
+# count as zero; a non-numeric segment outranks a number.
+NEWEST_AWK='
+function newer(a, b,   n, m, i, x, y, an, bn) {
+  n = split(a, x, "."); m = split(b, y, ".")
+  if (m > n) n = m
+  for (i = 1; i <= n; i++) {
+    if (x[i] == "") x[i] = "0"
+    if (y[i] == "") y[i] = "0"
+    if (x[i] == y[i]) continue
+    an = (x[i] ~ /^[0-9]+$/); bn = (y[i] ~ /^[0-9]+$/)
+    if (an && bn) return x[i] + 0 > y[i] + 0
+    if (!an && !bn) return x[i] > y[i]
+    return !an
+  }
+  return 0
+}
+{ version = $0; sub(/.*\//, "", version)
+  if (best == "" || newer(version, best)) { best = version; path = $0 } }
+END { if (path != "") print path }
+'
+
+# The hint is a fast path, not the only answer: a marketplace install path
+# carries the plugin version, so an update used to move the baked directory and
+# silently retire both hooks (BCC-14). lib/plugin-root.mjs is the reference
+# implementation of this order; keep the three in step.
+find_plugin_root() {
+  for candidate in "$(git config --get backlog-md.pluginroot 2>/dev/null)" "$PLUGIN_ROOT_HINT" "$CLAUDE_PLUGIN_ROOT"; do
+    # No guard against the unsubstituted placeholder: install rewrites every
+    # occurrence in this file, so the guard would be rewritten too. An
+    # uninstalled template's hint is a path that does not exist, which the
+    # next line already rejects.
+    [ -n "$candidate" ] || continue
+    if [ -f "$candidate/scripts/backlog-cc.mjs" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  # An update leaves the previous version directory behind, so the newest has
+  # to win — segment by segment as numbers, because a string sort puts 0.9.0
+  # above 0.10.0 (BCC-38). A non-numeric segment (Claude Code's `unknown`)
+  # outranks any number. The glob is iterated rather than word-split so a path
+  # with a space survives; no awk means no candidate, which fails open.
+  newest=$(
+    for candidate in "$HOME"/.claude/plugins/cache/*/backlog-md/*; do
+      [ -f "$candidate/scripts/backlog-cc.mjs" ] && printf '%s\n' "$candidate"
+    done | awk "$NEWEST_AWK"
+  )
+  [ -n "$newest" ] || return 1
+  printf '%s' "$newest"
+}
+
+PLUGIN_ROOT=$(find_plugin_root) || exit 0
+command -v node >/dev/null 2>&1 || exit 0
+
+# main() catches checkStaged's own rejections, but a broken import is hoisted
+# and uncatchable, and the `-f` guard above only checks that the entry file
+# exists, not that it still loads. Measured: that made `git commit` exit 1 with
+# a raw stack trace as the user's only explanation. Block only on the check's
+# own considered verdict — recognised by its marker line — so anything else
+# falls through and lets the commit happen.
+OUT=$(node "$PLUGIN_ROOT/scripts/backlog-cc.mjs" check-staged 2>&1); RC=$?
+if [ $RC -ne 0 ] && printf '%s' "$OUT" | grep -q 'backlog-md: staged task files'; then
+  printf '%s\n' "$OUT" >&2
+  exit 1
+fi
+exit 0

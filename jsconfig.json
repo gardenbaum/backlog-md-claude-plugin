@@ -1,0 +1,23 @@
+{
+  // Type checking without a TypeScript migration: JSDoc typedefs in
+  // lib/types.mjs plus checkJs give compiler-verified contracts at zero
+  // runtime cost and zero runtime dependencies.
+  "compilerOptions": {
+    "checkJs": true,
+    "noEmit": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2022",
+    "lib": ["es2022"],
+    "types": ["node"],
+    // strictNullChecks earns its keep: it is what forces the nullable spots
+    // (task.acceptanceCriteria, resolveActiveTask states) through narrowing.
+    "strictNullChecks": true,
+    // noImplicitAny stays off deliberately: turning it on adds ~130 parameter
+    // annotations across 20 files, and the value is in the shared result
+    // shapes, not in restating that a hook payload is an object. Turn it on
+    // per directory when a file's parameters start carrying real contracts.
+    "noImplicitAny": false
+  },
+  "include": ["lib/**/*.mjs", "hooks/**/*.mjs", "scripts/**/*.mjs"]
+}

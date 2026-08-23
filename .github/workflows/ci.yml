@@ -1,0 +1,87 @@
+name: CI
+
+# Read by both GitHub Actions and Gitea Actions, which scan the same
+# .github/workflows path. Every action below is pinned to the commit its tag
+# pointed at, with the tag in the trailing comment: a major-version tag is
+# mutable and can be moved onto code nobody here reviewed, which is the one
+# thing a pin is supposed to prevent. Updating means resolving the tag again
+# and changing the SHA deliberately.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # The suite without the backlog CLI installed: unit and contract tests run,
+  # every integration test skips itself. Linux is the case-sensitive
+  # filesystem the local macOS workstation cannot exercise.
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["18", "24"] # the engines floor and the current LTS
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+
+  # Formatter and linter in one binary. Gate, not advice: a violation fails.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - run: npm ci
+      - run: npm run lint
+
+  # JSDoc typedefs plus checkJs, so the discriminated result shapes are
+  # compiler-verified. Needs the devDependencies, hence npm ci.
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - run: npm ci
+      - run: npm run typecheck
+
+  # The readability check with teeth. The pre-commit hook runs the same rule
+  # locally, but it is a tripwire: `--no-verify` walks past it and it only
+  # exists on a machine where somebody installed it. Here it is a gate, over
+  # every task file on the branch (BCC-12).
+  tasks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - run: |
+          npm i -g --prefix "$RUNNER_TEMP/cli" backlog.md@1.50.1
+          echo "$RUNNER_TEMP/cli/bin" >> "$GITHUB_PATH"
+      - run: node scripts/backlog-cc.mjs check-tasks
+
+  # The same suite with the real CLI present, so the pinned flag contracts in
+  # test/integration are exercised instead of skipped. The CLI version is
+  # pinned: an unpinned install would make flag drift look like our bug.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      # Installing into the tool cache prefix destroyed npm itself on the
+      # runner (npm lost its own package.json), so the CLI goes into a
+      # private prefix that is only added to PATH.
+      - run: |
+          npm i -g --prefix "$RUNNER_TEMP/cli" backlog.md@1.50.1
+          echo "$RUNNER_TEMP/cli/bin" >> "$GITHUB_PATH"
+      - run: backlog --version
+      - run: npm run test:integration
