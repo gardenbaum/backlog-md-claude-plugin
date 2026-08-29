@@ -1,8 +1,8 @@
 # Changelog
 
 Versions come from `.claude-plugin/plugin.json` and are mirrored in
-`.claude-plugin/marketplace.json` and `package.json`; a test fails when the
-three diverge.
+`.claude-plugin/marketplace.json`, `package.json`, and `package-lock.json`.
+Tests fail when the public manifests diverge.
 
 ## After updating the plugin
 
@@ -16,6 +16,25 @@ through to the current install and everything works; if it still exists but
 holds the previous version, they run that one. `/backlog-md:doctor` reports
 what the installed hooks actually resolve to, and `/backlog-md:setup` rewrites
 the record.
+
+## 0.3.0 — 2026-08-29
+
+- The same marketplace package now installs natively in OMP through
+  `package.json#omp.extensions`, while retaining Claude Code's five command
+  hooks unchanged.
+- OMP lifecycle, input, prompt-start, tool-call, tool-result, compaction, and
+  shutdown events now drive the same active-task brief, observations,
+  direct-write guard, edit journal, and detached flush as Claude Code.
+- All eight `/backlog-md:*` commands are registered by the OMP extension from
+  the existing command templates. Plugin-root placeholders are rendered from
+  `import.meta.url`, so OMP does not depend on `CLAUDE_PLUGIN_ROOT`.
+- The three read-only agents now declare stable `name` fields accepted by both
+  hosts.
+- Optional git hooks now recover project-scoped, user-scoped, custom-config,
+  and XDG OMP installs before falling back to Claude Code's versioned cache.
+- Session journals now key repositories by canonical path, so detached
+  shutdown and sweep children on macOS read the same state when Node expands
+  `/var` to `/private/var`.
 
 ## 0.2.0 — 2026-08-23
 
@@ -51,4 +70,4 @@ Also removed: the statusline snippet, and the command that
 generated it. Anyone who copied it into their Claude Code settings should
 delete that line; nothing regenerates it. Both removals break earlier
 development installs, which is why this section is 0.2.0 rather than 0.1.0.
-Work after it continues at 0.2.1.
+Work after it continues at 0.3.1.

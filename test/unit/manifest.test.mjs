@@ -76,6 +76,14 @@ test("the marketplace and package.json list this plugin at its own version", () 
   assert.equal(entry.version, manifest.version);
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   assert.equal(pkg.version, manifest.version);
+  const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+  assert.equal(lock.version, manifest.version);
+  assert.equal(lock.packages[""].version, manifest.version);
+});
+test("package.json exposes the native OMP extension entry point", () => {
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.deepEqual(pkg.omp?.extensions, ["./omp/index.mjs"]);
+  assert.ok(existsSync(join(root, pkg.omp.extensions[0])));
 });
 
 test("the marketplace source points at this repository root", () => {

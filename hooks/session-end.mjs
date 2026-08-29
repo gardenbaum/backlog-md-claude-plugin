@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import { readHookInput, guard } from "../lib/protocol.mjs";
-import { findProject } from "../lib/paths.mjs";
-import { spawn } from "node:child_process";
-import { dirname, join } from "node:path";
+import { flushSession } from "../lib/integration.mjs";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Hands the session's edited-file list to a detached child and returns.
@@ -16,15 +15,13 @@ import { fileURLToPath } from "node:url";
 guard(
   async () => {
     const input = await readHookInput();
-    const project = findProject(input.cwd || process.cwd());
-    if (!project) return;
-
-    const cli = join(dirname(dirname(fileURLToPath(import.meta.url))), "scripts", "backlog-cc.mjs");
-    spawn(process.execPath, [cli, "flush", String(input.session_id ?? "")], {
-      cwd: project.root,
-      detached: true,
-      stdio: "ignore",
-    }).unref();
+    const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+    flushSession({
+      cwd: input.cwd,
+      sessionId: input.session_id,
+      pluginRoot,
+      nodeExecutable: process.execPath,
+    });
   },
   { event: "SessionEnd" },
 );

@@ -46,6 +46,11 @@ const agentPath = (name) => join("agents", `${name}.md`);
 test("all three agents exist", () => {
   for (const name of AGENTS) assert.ok(promptFiles().includes(agentPath(name)), `missing agent: ${name}`);
 });
+test("every agent declares the stable name OMP requires", () => {
+  for (const name of AGENTS) {
+    assert.equal(frontmatter(read(agentPath(name))).fields.name, name);
+  }
+});
 
 // Read-only on source. The tools line is the mechanical half of that; the
 // prose is the rest, because Bash cannot be withheld from an agent that has

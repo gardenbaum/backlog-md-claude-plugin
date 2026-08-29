@@ -1,6 +1,6 @@
 {
   "name": "gardenbaum",
-  "description": "Claude Code integration for the Backlog.md task manager",
+  "description": "Claude Code and OMP integration for the Backlog.md task manager",
   "owner": {
     "name": "Fabian Baumgartner"
   },
@@ -8,8 +8,8 @@
     {
       "name": "backlog-md",
       "source": "./",
-      "description": "Keeps a Claude Code session oriented on its Backlog.md task and routes every backlog mutation through the CLI that owns the files.",
-      "version": "0.2.0"
+      "description": "Keeps Claude Code and OMP sessions oriented on their Backlog.md task and routes every backlog mutation through the CLI that owns the files.",
+      "version": "0.3.0"
     }
   ]
 }

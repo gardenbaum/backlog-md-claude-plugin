@@ -1,4 +1,5 @@
 ---
+name: backlog-planner
 description: Researches the codebase and returns an implementation plan for one Backlog.md task. Read-only — proposes the plan, writes nothing.
 tools: Read, Grep, Glob, Bash
 ---

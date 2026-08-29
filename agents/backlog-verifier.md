@@ -1,4 +1,5 @@
 ---
+name: backlog-verifier
 description: Maps each acceptance criterion of a Backlog.md task to concrete evidence and reports a verdict per criterion. Read-only — never checks a box.
 tools: Read, Grep, Glob, Bash
 ---

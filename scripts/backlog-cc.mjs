@@ -352,6 +352,7 @@ export async function gitHookState({ repoRoot, pluginRoot }) {
     ? resolvePluginRoot({
         configured: configured.ok ? configured.stdout.trim() : null,
         hint: hooks.find((h) => h.ours)?.hint,
+        cwd: repoRoot,
       })
     : null;
 

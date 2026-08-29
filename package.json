@@ -1,10 +1,15 @@
 {
   "name": "backlog-md",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Claude Code plugin for the Backlog.md task manager",
+  "description": "Claude Code and OMP plugin for the Backlog.md task manager",
   "license": "MIT",
   "type": "module",
+  "omp": {
+    "extensions": [
+      "./omp/index.mjs"
+    ]
+  },
   "engines": {
     "node": ">=18"
   },

@@ -1,4 +1,5 @@
 ---
+name: backlog-decomposer
 description: Turns an idea into a set of proposed Backlog.md tasks with acceptance criteria and dependencies. Read-only — returns proposals, creates nothing.
 tools: Read, Grep, Glob, Bash
 ---

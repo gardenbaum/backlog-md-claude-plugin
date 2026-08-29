@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -18,6 +18,11 @@ import {
 } from "../../lib/cache.mjs";
 
 const repo = () => mkdtempSync(join(tmpdir(), "bcc-repo-"));
+
+test("lexical and canonical repository paths share one session directory", () => {
+  const root = repo();
+  assert.equal(cacheDir(root), cacheDir(realpathSync(root)));
+});
 
 test("a written snapshot reads back identically", () => {
   const root = repo();

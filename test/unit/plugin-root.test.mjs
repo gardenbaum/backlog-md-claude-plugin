@@ -43,6 +43,35 @@ test("the unsubstituted template placeholder is not a candidate", () => {
   assert.deepEqual(candidates, []);
 });
 
+test("the nearest project-scoped OMP install outranks user installs", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "bcc-omp-project-"));
+  const home = mkdtempSync(join(tmpdir(), "bcc-omp-home-"));
+  try {
+    const projectPlugin = fakePlugin(join(workspace, ".omp", "plugins", "node_modules"), "backlog-md");
+    fakePlugin(join(home, ".omp", "plugins", "node_modules"), "backlog-md");
+    assert.equal(resolvePluginRoot({ env: {}, home, cwd: join(workspace, "src") }), projectPlugin);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("OMP user installs resolve from XDG and custom config roots", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bcc-omp-roots-"));
+  try {
+    const xdgPlugin = fakePlugin(join(dir, "xdg", "omp", "plugins", "node_modules"), "backlog-md");
+    assert.equal(resolvePluginRoot({ env: { XDG_DATA_HOME: join(dir, "xdg") }, home: join(dir, "home") }), xdgPlugin);
+
+    const customPlugin = fakePlugin(join(dir, "custom", "plugins", "node_modules"), "backlog-md");
+    assert.equal(
+      resolvePluginRoot({ env: { PI_CONFIG_DIR: join(dir, "custom") }, home: join(dir, "home") }),
+      customPlugin,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // The case the whole module exists for: the plugin moved, nothing was
 // reinstalled, and the hook has to find it anyway.
 test("a plugin found only in the marketplace cache still resolves", () => {

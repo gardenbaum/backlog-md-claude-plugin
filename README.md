@@ -1,17 +1,19 @@
 # backlog-md
 
-A [Claude Code](https://claude.com/product/claude-code) plugin for the
-[Backlog.md](https://github.com/MrLesk/Backlog.md) task manager. It keeps a
-session oriented on the task it is working on — at session start, and again
-after context compaction — and it routes every backlog mutation through the
-`backlog` CLI that owns the files, rather than letting an editor tool touch
-them directly.
+A [Claude Code](https://claude.com/product/claude-code) and
+[Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi) plugin for the
+[Backlog.md](https://github.com/MrLesk/Backlog.md) task manager. One package
+keeps either host oriented on the task it is working on — at session start,
+after context compaction, and at prompt/tool boundaries — and routes every
+backlog mutation through the `backlog` CLI that owns the files, rather than
+letting an editor tool touch them directly.
 
 This is a community plugin, not affiliated with or endorsed by the upstream
 Backlog.md project.
 
 ## Requirements
 
+- Claude Code or OMP with plugin support.
 - Node 18 or newer.
 - `backlog` on your `PATH` (`npm i -g backlog.md`).
 - A repository where `backlog init` has already been run.
@@ -21,6 +23,8 @@ not claimed.
 
 ## Install
 
+### Claude Code
+
 Add this repository as a plugin marketplace, then install from it:
 
 ```
@@ -28,21 +32,34 @@ Add this repository as a plugin marketplace, then install from it:
 /plugin install backlog-md@gardenbaum
 ```
 
+### OMP
+
+Add the same marketplace and install the same package:
+
+```bash
+omp plugin marketplace add gardenbaum/backlog-md-claude-plugin
+omp plugin install backlog-md@gardenbaum
+```
+
+The package exposes Claude Code's command-hook manifest and OMP's native
+`package.json#omp.extensions` entry point side by side. Neither installation
+path needs generated files or a host-specific package.
+
 Then run `/backlog-md:setup` — it diagnoses the install and offers to install
 the optional git hooks. Do this before anything else; every other command
 assumes a working `backlog` and a discovered project.
 
 ## What happens without you asking
 
-Five hooks, none of which need to be invoked:
+The host-specific wiring differs; the behavior does not:
 
-| Hook | What it does |
-|---|---|
-| `SessionStart` | Injects the active task — acceptance criteria, definition of done, plan, blocking dependencies, description, references, documentation, the most recent comments, recent notes — so the session opens already oriented. Its matcher covers `startup`, `resume`, `clear` and `compact`, so the same brief arrives again on the other side of a compaction. |
-| `UserPromptSubmit` | A turn-boundary observation: surfaces a task named in the prompt that isn't the active one, reports what changed on the active task since it was last checked, and nudges toward starting a task before writing code — only when the CLI positively reports an empty In Progress column, never when it could not answer. Never blocks. |
-| `PostToolUse` | The other turn-boundary observation: records edited files and backlog-mutating `Bash` commands for `UserPromptSubmit` and `SessionEnd` to read later. Never denies, never calls the CLI itself. |
-| `SessionEnd` | The modified-file flush: writes the session's edited-file list onto the active task, then discards the session's cache. Handed to a detached child, because Claude Code cancels a hook still running while it shuts down. |
-| `PreToolUse` | The redirect of hand-edits to the CLI: denies a `Write`/`Edit`/`NotebookEdit` aimed at a Backlog.md-managed file and names the `backlog` command that should have been run instead. The plugin's only `deny`. |
+| Claude Code hook | OMP native event | What it does |
+|---|---|---|
+| `SessionStart` | `session_start`, `session_switch`, `session_branch`, `session_tree`, `session_compact` | Injects the active task — acceptance criteria, definition of done, plan, blocking dependencies, description, references, documentation, the most recent comments, recent notes — so the session opens already oriented and gets a fresh brief after compaction or navigation. |
+| `UserPromptSubmit` | `input` + `before_agent_start` | A turn-boundary observation: surfaces a task named in the prompt that isn't the active one, reports what changed on the active task since it was last checked, and nudges toward starting a task before writing code — only when the CLI positively reports an empty In Progress column, never when it could not answer. Never blocks. |
+| `PostToolUse` | `tool_result` | Records edited files and backlog-mutating shell commands for the next prompt observation and session shutdown to read later. Never denies, never calls the CLI itself. |
+| `SessionEnd` | `session_shutdown` | Flushes the session's modified-file list onto the active task, then discards the session cache. Both adapters hand the flush to a detached Node child so host shutdown cannot cancel it. |
+| `PreToolUse` | `tool_call` | Redirects direct writes to Backlog.md-managed files to the CLI. Claude covers `Write`/`Edit`/`NotebookEdit`; OMP covers `write`, `edit`, `ast_edit`, and mutating `lsp` operations. The plugin's only block. |
 
 The active task is resolved by checking the current branch name for a task id
 first, then by finding exactly one task in the `In Progress` column. More
@@ -55,6 +72,10 @@ the way Claude Code does — one process, JSON on stdin — against a throwaway
 copy of this repository's own backlog, and reads the milliseconds each hook
 records with `BACKLOG_MD_DEBUG=1`. 15 runs per row, Apple silicon, Node 24,
 44 task files, machine otherwise idle.
+
+These timings measure Claude Code's one-process-per-hook adapter. OMP loads
+`omp/index.mjs` in-process, so it shares the same Backlog.md CLI costs but not
+the Node startup column.
 
 | | in hook | p95 | whole process |
 |---|---|---|---|
@@ -120,10 +141,11 @@ still performs any mutation, after you've reviewed it.
 
 ## The design position
 
-*Add context, do not remove capability.* Every hook above only ever injects
-information or records it for later — the one exception is the single guard
-in `PreToolUse`, and even that doesn't make anything impossible, it makes one
-thing correct: a hand-edit of a task gets redirected to the CLI command that
+*Add context, do not remove capability.* Every integration above only ever
+injects information or records it for later — the one exception is the single
+direct-write guard (`PreToolUse` in Claude Code, `tool_call` in OMP), and even
+that doesn't make anything impossible, it makes one thing correct: a
+hand-edit of a managed Backlog.md file gets redirected to the CLI command that
 should have made the change. This project's own manifesto names complexity
 creep as a risk in itself, and a tool that blocks a person's own commit is
 enforcing discipline nobody asked it to enforce. One guard, one switch — no
@@ -131,21 +153,22 @@ gates on commits, no gates on plans.
 
 ## The switch
 
-`BACKLOG_MD_GUARD=0` turns the `PreToolUse` deny into a warning: the edit
+`BACKLOG_MD_GUARD=0` turns the direct-write block into a warning: the edit
 goes through, and the same redirect message is injected as context instead of
-blocking it. On by default.
+blocking it. On by default in both hosts.
 
-`BACKLOG_MD_DEBUG=1` appends one JSONL record per hook run — hook, event,
-elapsed milliseconds, and the error message and stack when there was one — to
-`$XDG_STATE_HOME/backlog-md-cc/debug.jsonl` (`~/.local/state/...` by default;
-`doctor` prints the path). Off by default, and with it unset nothing is read,
-written or created. It exists because every hook body runs inside a guard that
-swallows exceptions, which is right for the session and leaves nobody a way to
-see why a hook silently did nothing. Writing the log is best-effort: an
-unwritable location costs the hook nothing.
+In Claude Code, `BACKLOG_MD_DEBUG=1` appends one JSONL record per hook run —
+hook, event, elapsed milliseconds, and the error message and stack when there
+was one — to `$XDG_STATE_HOME/backlog-md-cc/debug.jsonl`
+(`~/.local/state/...` by default; `doctor` prints the path). Off by default,
+and with it unset nothing is read, written or created. It exists because every
+Claude hook body runs inside a guard that swallows exceptions, which is right
+for the session and otherwise leaves no diagnostic. Writing the log is
+best-effort: an unwritable location costs the hook nothing. OMP routes adapter
+exceptions to its native file logger instead and does not read this switch.
 
-There is no configuration file — these two environment variables are the only
-knobs.
+There is no plugin configuration file. `BACKLOG_MD_GUARD` applies to both
+hosts; `BACKLOG_MD_DEBUG` is the Claude hook diagnostic switch.
 
 ## The git hooks
 
@@ -156,13 +179,17 @@ a staged task file the CLI can no longer read.
 Neither depends on where the plugin happens to live. Each one resolves it when
 it runs, in this order: `git config backlog-md.pluginRoot` (recorded by the
 installer, and the way to point a hook at a development checkout), the path
-noted at install time, `CLAUDE_PLUGIN_ROOT`, and finally the newest
+noted at install time, `CLAUDE_PLUGIN_ROOT`, a project OMP install under
+`.omp/plugins/node_modules/backlog-md`, an OMP user install under
+`~/.omp/plugins/node_modules/backlog-md` or
+`$XDG_DATA_HOME/omp/plugins/node_modules/backlog-md`, and finally the newest
 `~/.claude/plugins/cache/*/backlog-md/*` that holds the plugin. Nothing found
 means the hook exits 0 and the commit proceeds — an uninstalled plugin must
-not be able to block a commit. `lib/plugin-root.mjs` is the
-reference implementation of that order, each hook carries its own copy in
-POSIX sh so that no hook depends on a second file being present, and
-`/backlog-md:doctor` reports what the installed hooks resolve to.
+not be able to block a commit. `PI_CONFIG_DIR` is honored for a relocated OMP
+config root. `lib/plugin-root.mjs` is the reference implementation of that
+order, each hook carries its own copy in POSIX sh so no hook depends on a
+second file being present, and `/backlog-md:doctor` reports what the installed
+hooks resolve to.
 
 Because of that, `install-hooks --shared` — which writes the hooks into a
 committed `.githooks` directory and sets `core.hooksPath` — writes no path
@@ -198,17 +225,18 @@ reads.
   throwaway project and asking the CLI to read it there. That costs a temp
   directory and one `git show` per staged task file, and it means the check
   cannot see a task the commit does not touch.
-- The `PreToolUse` guard matches `Write|Edit|NotebookEdit`, not `Bash`, so a
-  shell write to a task file is not redirected: `sed -i`, `echo >`, `tee`, an
-  in-place editor, anything that reaches the file without an editor tool. This
-  is not defended, deliberately. Recognising a write in a shell command means
-  parsing shell — redirections, pipelines, `sh -c`, aliases, an editor nobody
-  thought of — and a guard that gets that wrong either blocks legitimate work
-  or gives false assurance. The guard is a signpost against reaching for the
-  wrong tool by habit, not a control against someone routing around it. The
-  pre-commit hook catches part of what passes here afterwards, by rejecting a
-  staged task file the CLI can no longer read — a tripwire, one commit later,
-  and only for damage that makes the file unreadable.
+- The direct-write guard does not match shell tools, so a shell write to a task
+  file is not redirected: `sed -i`, `echo >`, `tee`, an in-place editor,
+  anything that reaches the file through a shell. Claude Code guards
+  `Write|Edit|NotebookEdit`; OMP guards its native `write`, `edit`, `ast_edit`,
+  and mutating `lsp` operations. Recognising a write in an arbitrary shell
+  command means parsing shell — redirections, pipelines, `sh -c`, aliases, an
+  editor nobody thought of — and a guard that gets that wrong either blocks
+  legitimate work or gives false assurance. The guard is a signpost against
+  reaching for the wrong tool by habit, not a control against someone routing
+  around it. The pre-commit hook catches part of what passes here afterwards,
+  by rejecting a staged task file the CLI can no longer read — a tripwire, one
+  commit later, and only for damage that makes the file unreadable.
 - The three agents need `Bash` to gather evidence, so "never mutates the
   backlog" is enforced by their prompts, not mechanically. That is the same
   gap as the entry above, seen from the other side: extending the guard to
@@ -220,9 +248,9 @@ reads.
   --force` replaces it instead, keeping the replaced hook as
   `<name>.backlog-md.bak`. Chaining is still the better answer: the backup is
   a file nothing runs.
-- `SessionEnd` does not always run: a crash never fires it. A normal quit no
-  longer loses it — the hook hands its flush to a detached child and returns
-  in 10ms, so Claude Code's shutdown abort has nothing left to cancel — but
+- Session shutdown does not always run: a crash never fires it. A normal quit
+  no longer loses it — both host adapters hand the flush to a detached child
+  and return, so host shutdown has nothing left to cancel —
   the child is a separate process, and a machine that goes down between the
   two still leaves the flush undone. Nor does a flush that runs but cannot
   finish: an unreachable CLI leaves the journal in place rather than
@@ -235,14 +263,12 @@ reads.
   not its files: the sweep writes the list onto the task before removing the
   journal. Thirty minutes is a guess at liveness; nothing in the state
   directory says whether a session is still running.
-- Nothing is injected *before* a compaction, only after it. The plugin used
-  to register a `PreCompact` hook for that, and Claude Code 2.1.238 rejects
-  its output: `hookSpecificOutput` is defined for `PreToolUse`,
-  `UserPromptSubmit`, `PostToolUse`, `PostToolBatch` and `Stop`, and a
-  `PreCompact` entry is not one of them, so the hook could only fail loudly at
-  every `/compact`. It is gone. What the summariser sees is therefore whatever
-  brief was already in the context; the fresh one arrives with the
-  `SessionStart` that follows.
+- Claude Code injects nothing *before* a compaction, only after it. The plugin
+  used to register a `PreCompact` hook for that, and Claude Code 2.1.238
+  rejects its output: `hookSpecificOutput` has no `PreCompact` variant, so the
+  hook could only fail loudly at every `/compact`. It is gone; the fresh brief
+  arrives with the `SessionStart` that follows. OMP has a native
+  `session_compact` event and injects the same fresh brief there.
 - Two concurrent sessions that resolve their task by status see the same
   task.
 - Path classification is lexical: the deny decision compares the edited path

@@ -45,6 +45,21 @@ find_plugin_root() {
       return 0
     fi
   done
+  repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
+  omp_config=${PI_CONFIG_DIR:-.omp}
+  case "$omp_config" in
+    /*) omp_root="$omp_config" ;;
+    *) omp_root="$HOME/$omp_config" ;;
+  esac
+  for candidate in "$repo_root/.omp/plugins/node_modules/backlog-md" \
+    "${XDG_DATA_HOME:+$XDG_DATA_HOME/omp/plugins/node_modules/backlog-md}" \
+    "$omp_root/plugins/node_modules/backlog-md"; do
+    [ -n "$candidate" ] || continue
+    if [ -f "$candidate/scripts/backlog-cc.mjs" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
   # An update leaves the previous version directory behind, so the newest has
   # to win — segment by segment as numbers, because a string sort puts 0.9.0
   # above 0.10.0 (BCC-38). A non-numeric segment (Claude Code's `unknown`)

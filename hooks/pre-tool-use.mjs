@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { readHookInput, emitAdditionalContext, emitPermissionDecision, guard } from "../lib/protocol.mjs";
-import { findProject, classifyBacklogPath } from "../lib/paths.mjs";
-import { denyReason } from "../lib/deny.mjs";
+import { evaluateToolGuard } from "../lib/integration.mjs";
 import { notice } from "../lib/render.mjs";
 
 // The plugin's only deny. Nothing becomes impossible, one thing becomes
@@ -12,25 +11,20 @@ import { notice } from "../lib/render.mjs";
 guard(
   async () => {
     const input = await readHookInput();
-    const project = findProject(input.cwd || process.cwd());
-    if (!project) return;
+    const result = evaluateToolGuard({
+      cwd: input.cwd,
+      toolName: input.tool_name,
+      toolInput: input.tool_input,
+      guard: process.env.BACKLOG_MD_GUARD,
+    });
+    if (!result) return;
 
-    const toolInput = input.tool_input || {};
-    const target = toolInput.file_path || toolInput.notebook_path;
-    if (!target) return;
-
-    const classification = classifyBacklogPath(target, project);
-    if (!classification.managed) return;
-
-    const reason = denyReason(classification, toolInput);
-
-    if (process.env.BACKLOG_MD_GUARD === "0") {
-      // Plugin guidance addressed to the agent, so notice(), not frame().
-      emitAdditionalContext("PreToolUse", notice(`Warning, not blocked (BACKLOG_MD_GUARD=0):\n\n${reason}`));
+    if (!result.block) {
+      emitAdditionalContext("PreToolUse", notice(`Warning, not blocked (BACKLOG_MD_GUARD=0):\n\n${result.reason}`));
       return;
     }
 
-    emitPermissionDecision("PreToolUse", "deny", reason);
+    emitPermissionDecision("PreToolUse", "deny", result.reason);
   },
   { event: "PreToolUse" },
 );
