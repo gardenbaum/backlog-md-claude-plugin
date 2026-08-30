@@ -67,6 +67,24 @@ test("both git hooks resolve a project-scoped OMP plugin", async (t) => {
   await assertBothHooksResolve(project, {});
 });
 
+test("both git hooks walk ancestors for a monorepo-scoped OMP plugin", async (t) => {
+  const outer = mkdtempSync(join(tmpdir(), "bcc-omp-monorepo-"));
+  t.after(() => rmSync(outer, { recursive: true, force: true }));
+  const dir = join(outer, "packages", "app");
+  mkdirSync(dir, { recursive: true });
+  const init = await run("git", ["init", "-q", "."], { cwd: dir });
+  assert.equal(init.ok, true, init.stderr || init.stdout);
+
+  const hooks = join(dir, ".git", "hooks");
+  for (const name of ["pre-commit", "prepare-commit-msg"]) {
+    copyFileSync(join(root, "git", name), join(hooks, name));
+    chmodSync(join(hooks, name), 0o755);
+  }
+  const pluginRoot = join(outer, ".omp", "plugins", "node_modules", "backlog-md");
+  fakePlugin(pluginRoot);
+  await assertBothHooksResolve({ dir, hooks }, {});
+});
+
 test("both git hooks resolve an XDG user-scoped OMP plugin", async (t) => {
   const xdg = mkdtempSync(join(tmpdir(), "bcc-omp-xdg-"));
   t.after(() => rmSync(xdg, { recursive: true, force: true }));

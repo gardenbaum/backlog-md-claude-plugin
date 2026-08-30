@@ -5,7 +5,7 @@ description: Propose the next ready Backlog.md task, and start it once the user 
 Find the ready work:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" next
+"${BACKLOG_MD_NODE:-node}" "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" next
 ```
 
 Then:

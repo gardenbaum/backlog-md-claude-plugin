@@ -3,7 +3,7 @@ description: First-run setup for the backlog-md plugin — diagnosis and the opt
 ---
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" setup
+"${BACKLOG_MD_NODE:-node}" "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" setup
 ```
 
 Present the output in two parts, and **write nothing without asking first**:

@@ -14,9 +14,15 @@ Backlog.md project.
 ## Requirements
 
 - Claude Code or OMP with plugin support.
-- Node 18 or newer.
+- Node 18 or newer, reachable as `node` or through `BACKLOG_MD_NODE`.
 - `backlog` on your `PATH` (`npm i -g backlog.md`).
 - A repository where `backlog init` has already been run.
+
+OMP itself may be a standalone executable, but the plugin's detached sweep and
+shutdown workers still run under Node. If `node` is absent from OMP's `PATH`,
+launch it with `BACKLOG_MD_NODE=/absolute/path/to/node`; the same override is
+used by slash-command wrappers and the optional git hooks. `/backlog-md:doctor`
+probes that exact command separately from the Node process running doctor.
 
 Without any of these the plugin is a silent no-op. Windows is untested and
 not claimed.
@@ -45,6 +51,13 @@ The package exposes Claude Code's command-hook manifest and OMP's native
 `package.json#omp.extensions` entry point side by side. Neither installation
 path needs generated files or a host-specific package.
 
+OMP's Claude-plugin compatibility provider also discovers the Markdown command
+files. The native extension deliberately registers each name once, and OMP
+dispatches extension commands before file commands, so there is one effective
+`/backlog-md:*` implementation: the native handler that renders the installed
+root and never depends on an ambient `CLAUDE_PLUGIN_ROOT`. A shadowed Markdown
+copy may still appear in OMP's command-source diagnostics.
+
 Then run `/backlog-md:setup` — it diagnoses the install and offers to install
 the optional git hooks. Do this before anything else; every other command
 assumes a working `backlog` and a discovered project.
@@ -58,8 +71,8 @@ The host-specific wiring differs; the behavior does not:
 | `SessionStart` | `session_start`, `session_switch`, `session_branch`, `session_tree`, `session_compact` | Injects the active task — acceptance criteria, definition of done, plan, blocking dependencies, description, references, documentation, the most recent comments, recent notes — so the session opens already oriented and gets a fresh brief after compaction or navigation. |
 | `UserPromptSubmit` | `input` + `before_agent_start` | A turn-boundary observation: surfaces a task named in the prompt that isn't the active one, reports what changed on the active task since it was last checked, and nudges toward starting a task before writing code — only when the CLI positively reports an empty In Progress column, never when it could not answer. Never blocks. |
 | `PostToolUse` | `tool_result` | Records edited files and backlog-mutating shell commands for the next prompt observation and session shutdown to read later. Never denies, never calls the CLI itself. |
-| `SessionEnd` | `session_shutdown` | Flushes the session's modified-file list onto the active task, then discards the session cache. Both adapters hand the flush to a detached Node child so host shutdown cannot cancel it. |
-| `PreToolUse` | `tool_call` | Redirects direct writes to Backlog.md-managed files to the CLI. Claude covers `Write`/`Edit`/`NotebookEdit`; OMP covers `write`, `edit`, `ast_edit`, and mutating `lsp` operations. The plugin's only block. |
+| `SessionEnd` | `session_shutdown` | Flushes the session's modified-file list onto the active task, then discards the session cache. Both adapters hand the flush to a detached Node child so host shutdown cannot cancel it. OMP uses `BACKLOG_MD_NODE` when set. |
+| `PreToolUse` | `tool_call` | Redirects direct writes to Backlog.md-managed files to the CLI. Claude covers `Write`/`Edit`/`NotebookEdit`; OMP covers `write`, `edit`, `ast_edit`, and mutating `lsp` operations, including `ast_edit`/`lsp` mounted through top-level `write xd://…` calls. The plugin's only block. |
 
 The active task is resolved by checking the current branch name for a task id
 first, then by finding exactly one task in the `In Progress` column. More
@@ -164,11 +177,18 @@ was one — to `$XDG_STATE_HOME/backlog-md-cc/debug.jsonl`
 and with it unset nothing is read, written or created. It exists because every
 Claude hook body runs inside a guard that swallows exceptions, which is right
 for the session and otherwise leaves no diagnostic. Writing the log is
-best-effort: an unwritable location costs the hook nothing. OMP routes adapter
-exceptions to its native file logger instead and does not read this switch.
+best-effort: an unwritable location costs the hook nothing.
+
+OMP logs adapter exceptions through its native logger and also keeps unresolved
+runtime failures in bounded per-project state under
+`$XDG_STATE_HOME/backlog-md-cc/<project>/health/omp.json`. The file holds at
+most 16 latest failures, one per operation; a newer successful attempt clears
+its failure. `/backlog-md:doctor` reports only unresolved failures, never a
+cached success.
 
 There is no plugin configuration file. `BACKLOG_MD_GUARD` applies to both
-hosts; `BACKLOG_MD_DEBUG` is the Claude hook diagnostic switch.
+hosts; `BACKLOG_MD_NODE` selects their worker Node; `BACKLOG_MD_DEBUG` is the
+Claude hook diagnostic switch.
 
 ## The git hooks
 
@@ -179,7 +199,8 @@ a staged task file the CLI can no longer read.
 Neither depends on where the plugin happens to live. Each one resolves it when
 it runs, in this order: `git config backlog-md.pluginRoot` (recorded by the
 installer, and the way to point a hook at a development checkout), the path
-noted at install time, `CLAUDE_PLUGIN_ROOT`, a project OMP install under
+noted at install time, `CLAUDE_PLUGIN_ROOT`, the nearest OMP install found by
+walking from the repository root through its ancestors for
 `.omp/plugins/node_modules/backlog-md`, an OMP user install under
 `~/.omp/plugins/node_modules/backlog-md` or
 `$XDG_DATA_HOME/omp/plugins/node_modules/backlog-md`, and finally the newest
@@ -313,7 +334,7 @@ import order here groups local modules before `node:` builtins for a reader,
 which alphabetical order destroys.
 
 Every integration test skips itself when `backlog` is not installed —
-measured: 0 of 29, including the ones that only touch git or the plugin's
+measured: 0 of 30, including the ones that only touch git or the plugin's
 own scripts. None is exempted yet.
 
 `.github/workflows/ci.yml` runs that suite on every push and pull request:

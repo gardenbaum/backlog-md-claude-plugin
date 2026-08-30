@@ -7,7 +7,7 @@ Do these in order and stop at the first one that fails.
 **Find the task:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" active
+"${BACKLOG_MD_NODE:-node}" "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" active
 ```
 
 If the state is not `status` or `branch`, there is no single active task — say

@@ -19,5 +19,5 @@
     // per directory when a file's parameters start carrying real contracts.
     "noImplicitAny": false
   },
-  "include": ["lib/**/*.mjs", "hooks/**/*.mjs", "scripts/**/*.mjs"]
+  "include": ["lib/**/*.mjs", "hooks/**/*.mjs", "omp/**/*.mjs", "scripts/**/*.mjs"]
 }

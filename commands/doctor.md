@@ -5,7 +5,7 @@ description: Diagnose the backlog-md plugin — CLI reachability, project discov
 Run the diagnosis and report it to the user:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" doctor
+"${BACKLOG_MD_NODE:-node}" "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" doctor
 ```
 
 Present the output as-is. A line marked `warn` is a Backlog.md setting that
@@ -24,6 +24,12 @@ report it and leave it alone unless the user asks:
 Then, for any line marked `FAIL`, explain the consequence and the fix in one
 sentence each:
 
+- **worker node not reachable** — detached OMP sweep/shutdown workers, slash
+  command wrappers, and optional git hooks cannot run; set `BACKLOG_MD_NODE` to
+  an absolute Node 18+ executable available to the host.
+- **OMP `<operation>` failed** — that adapter operation has not had a newer
+  successful attempt; report its timestamp and message, then retry the named
+  lifecycle action before claiming it recovered.
 - **backlog not reachable** — the plugin is inert; install it with `npm i -g backlog.md`.
 - **no Backlog.md project** — run `backlog init` in this repository first.
 - **no 'In Progress' column** — status-based resolution is off; use a branch
@@ -35,8 +41,8 @@ sentence each:
   the plugin when they run and found none, so they are silent no-ops;
   reinstall the plugin, or re-run `/backlog-md:setup` from the copy you want
   them to use.
-- **no hook has recorded a run** — if this persists after a fresh session, the
-  hook environment cannot find `node`. Report the `node.execPath` from the
-  diagnosis so the user can put that directory on their `PATH`.
+- **no hook has recorded a run** — after a fresh session, inspect host hook
+  configuration and the diagnosis's separate worker-node result; absence alone
+  does not prove which prerequisite failed.
 
 Do not attempt to fix anything without being asked.

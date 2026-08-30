@@ -8,7 +8,7 @@ The task to start is `$ARGUMENTS`. If that is empty, ask which task and stop.
 **First, check what is already running:**
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" active
+"${BACKLOG_MD_NODE:-node}" "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" active
 ```
 
 - If the state is `status` or `branch` and the id is **not** the one requested,
@@ -28,7 +28,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" active
 
 ```bash
 backlog task edit $ARGUMENTS -s "In Progress"
-node "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" brief $ARGUMENTS
+"${BACKLOG_MD_NODE:-node}" "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" brief $ARGUMENTS
 ```
 
 The brief is the task's own content — acceptance criteria, plan, notes,

@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { run } from "../../lib/proc.mjs";
+import { run, workerNodeExecutable } from "../../lib/proc.mjs";
+
+test("worker Node honors a non-empty BACKLOG_MD_NODE override", () => {
+  assert.equal(workerNodeExecutable({ BACKLOG_MD_NODE: " /opt/node/bin/node " }), "/opt/node/bin/node");
+  assert.equal(workerNodeExecutable({ BACKLOG_MD_NODE: " " }), "node");
+  assert.equal(workerNodeExecutable({}, process.execPath), process.execPath);
+});
 
 test("run returns ok with stdout on success", async () => {
   const r = await run("node", ["-e", "process.stdout.write('hello')"]);

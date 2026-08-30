@@ -14,17 +14,18 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test test/*/*.test.mjs",
-    "test:unit": "node --test test/unit/*.test.mjs",
-    "test:contract": "node --test test/contract/*.test.mjs",
-    "test:integration": "node --test test/integration/*.test.mjs",
-    "coverage": "node --test --experimental-test-coverage test/*/*.test.mjs",
+    "test": "node --require ./test/helpers/isolate-state.cjs --test --test-concurrency=2 test/*/*.test.mjs",
+    "test:unit": "node --require ./test/helpers/isolate-state.cjs --test --test-concurrency=2 test/unit/*.test.mjs",
+    "test:contract": "node --require ./test/helpers/isolate-state.cjs --test --test-concurrency=2 test/contract/*.test.mjs",
+    "test:integration": "node --require ./test/helpers/isolate-state.cjs --test --test-concurrency=2 test/integration/*.test.mjs",
+    "coverage": "node --require ./test/helpers/isolate-state.cjs --test --test-concurrency=2 --experimental-test-coverage test/*/*.test.mjs",
     "typecheck": "tsc -p jsconfig.json",
     "lint": "biome check .",
     "format": "biome check --write ."
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
+    "@oh-my-pi/pi-coding-agent": "18.0.10",
     "@types/node": "24.13.3",
     "typescript": "5.9.3"
   }

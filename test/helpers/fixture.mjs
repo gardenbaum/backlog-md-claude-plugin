@@ -8,6 +8,17 @@ export async function backlogAvailable() {
   return r.ok;
 }
 
+export function parseCliJson(result, command) {
+  if (!result.ok) {
+    throw new Error(`backlog ${command} failed (${result.reason ?? "unknown"}): ${result.stderr || result.stdout}`);
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    throw new Error(`backlog ${command} returned malformed JSON: ${result.stdout}`);
+  }
+}
+
 /** Create a real Backlog.md project in a temp directory. */
 export async function makeProject({ git = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "bcc-fixture-"));
@@ -31,10 +42,10 @@ export async function makeProject({ git = false } = {}) {
       root,
       cli,
       async createTask(title, extra = []) {
-        const r = await cli(["task", "create", title, ...extra]);
-        if (!r.ok) throw new Error(`task create failed: ${r.stderr || r.stdout}`);
+        const created = await cli(["task", "create", title, ...extra]);
+        if (!created.ok) throw new Error(`task create failed: ${created.stderr || created.stdout}`);
         const list = await cli(["task", "list", "--json"]);
-        const tasks = JSON.parse(list.stdout).tasks;
+        const tasks = parseCliJson(list, "task list --json").tasks;
         const matches = tasks.filter((t) => t.title === title);
         if (matches.length === 0) {
           throw new Error(

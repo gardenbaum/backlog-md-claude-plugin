@@ -117,6 +117,17 @@ test("commands address plugin files through CLAUDE_PLUGIN_ROOT", () => {
   }
 });
 
+test("command wrappers honor BACKLOG_MD_NODE for hosts without node on PATH", () => {
+  for (const name of COMMANDS) {
+    const text = read(join("commands", `${name}.md`));
+    for (const line of text.split("\n")) {
+      if (line.includes("backlog-cc.mjs")) {
+        assert.match(line, /\$\{BACKLOG_MD_NODE:-node\}/, `${name}: ${line.trim()}`);
+      }
+    }
+  }
+});
+
 // Naming a state is not covering it: the first version of this test passed on
 // a start.md that listed all five states and prescribed nothing for two of
 // them. The bullet is found by its backticked state name, because matching

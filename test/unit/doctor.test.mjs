@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { collectDoctor, formatDoctor, HOOK_MARKER, HOOK_NAMES } from "../../scripts/backlog-cc.mjs";
-import { stateBase, writeCache } from "../../lib/cache.mjs";
+import { recordRuntimeFailure, stateBase, writeCache } from "../../lib/cache.mjs";
 import { run } from "../../lib/proc.mjs";
 
 // This repository's own root — a hint that really does resolve, which is what
@@ -51,6 +51,37 @@ async function gitProjectDir() {
 test("the report names the node version it is running under", async () => {
   const r = await collectDoctor({ cwd: projectDir(), sessionId: "s" });
   assert.equal(r.node.version, process.version);
+});
+
+test("the report probes the configured worker Node separately from its host runtime", async () => {
+  const original = process.env.BACKLOG_MD_NODE;
+  const root = projectDir();
+  try {
+    process.env.BACKLOG_MD_NODE = join(root, "missing-node");
+    const missing = await collectDoctor({ cwd: root, sessionId: "s" });
+    assert.equal(missing.node.version, process.version);
+    assert.equal(missing.workerNode.reachable, false);
+    assert.match(formatDoctor(missing), /FAIL worker node[\s\S]*BACKLOG_MD_NODE/);
+
+    process.env.BACKLOG_MD_NODE = process.execPath;
+    const reachable = await collectDoctor({ cwd: root, sessionId: "s" });
+    assert.equal(reachable.workerNode.reachable, true);
+    assert.equal(reachable.workerNode.supported, true);
+    assert.match(reachable.workerNode.version, /^v\d+/);
+  } finally {
+    if (original === undefined) delete process.env.BACKLOG_MD_NODE;
+    else process.env.BACKLOG_MD_NODE = original;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the report surfaces unresolved OMP failures without a stale success line", async () => {
+  const root = projectDir();
+  recordRuntimeFailure(root, "OMP session_start", new Error("message failed"), 1);
+  const r = await collectDoctor({ cwd: root, sessionId: "s" });
+  const output = formatDoctor(r);
+  assert.match(output, /FAIL OMP session_start failed[\s\S]*message failed/);
+  assert.doesNotMatch(output, /OMP session_start.*(?:ok|succeeded)/i);
 });
 
 test("the report locates the project when there is one", async () => {
@@ -328,6 +359,7 @@ test("the same error writes nothing at all with the knob unset", async () => {
  */
 const configReport = (config) => ({
   node: { version: process.version, execPath: process.execPath },
+  workerNode: { command: "node", reachable: true, version: process.version, supported: true },
   backlog: { reachable: true, version: "1.50.1" },
   project: { found: true, root: "/p", backlogDir: "/p/backlog", configPath: "/p/backlog/config.yml" },
   statuses: null,
@@ -335,6 +367,7 @@ const configReport = (config) => ({
   git: null,
   cache: { path: null, snapshot: null },
   hooks: { runs: {}, everRan: false },
+  ompFailures: [],
   config,
   guard: { enabled: true },
   debug: { enabled: false, log: "/dev/null" },

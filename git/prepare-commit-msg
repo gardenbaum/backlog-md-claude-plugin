@@ -53,13 +53,25 @@ find_plugin_root() {
     fi
   done
   repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
+  current=$repo_root
+  while [ -n "$current" ]; do
+    candidate="$current/.omp/plugins/node_modules/backlog-md"
+    if [ -f "$candidate/scripts/backlog-cc.mjs" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+    [ "$current" = "/" ] && break
+    parent=${current%/*}
+    [ -n "$parent" ] || parent=/
+    [ "$parent" != "$current" ] || break
+    current=$parent
+  done
   omp_config=${PI_CONFIG_DIR:-.omp}
   case "$omp_config" in
     /*) omp_root="$omp_config" ;;
     *) omp_root="$HOME/$omp_config" ;;
   esac
-  for candidate in "$repo_root/.omp/plugins/node_modules/backlog-md" \
-    "${XDG_DATA_HOME:+$XDG_DATA_HOME/omp/plugins/node_modules/backlog-md}" \
+  for candidate in "${XDG_DATA_HOME:+$XDG_DATA_HOME/omp/plugins/node_modules/backlog-md}" \
     "$omp_root/plugins/node_modules/backlog-md"; do
     [ -n "$candidate" ] || continue
     if [ -f "$candidate/scripts/backlog-cc.mjs" ]; then
@@ -79,9 +91,10 @@ find_plugin_root() {
 }
 
 PLUGIN_ROOT=$(find_plugin_root) || exit 0
-command -v node >/dev/null 2>&1 || exit 0
+NODE_EXECUTABLE=${BACKLOG_MD_NODE:-node}
+command -v "$NODE_EXECUTABLE" >/dev/null 2>&1 || exit 0
 
-ID=$(node "$PLUGIN_ROOT/scripts/backlog-cc.mjs" active-id 2>/dev/null)
+ID=$("$NODE_EXECUTABLE" "$PLUGIN_ROOT/scripts/backlog-cc.mjs" active-id 2>/dev/null)
 [ -n "$ID" ] || exit 0
 
 # commit.verbose/-v/cleanup=scissors put everything from git's scissors line

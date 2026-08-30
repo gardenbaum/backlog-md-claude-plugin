@@ -4,9 +4,9 @@ import { resolveActiveTask, describeActiveTask, IN_PROGRESS } from "../lib/activ
 import { taskView, configList, configValue } from "../lib/backlog.mjs";
 import { findNext } from "../lib/next.mjs";
 import { renderBrief, renderNext } from "../lib/render.mjs";
-import { readCache, cachePath, debugLog, debugPath } from "../lib/cache.mjs";
+import { readCache, cachePath, debugLog, debugPath, readRuntimeFailures } from "../lib/cache.mjs";
 import { resolvePluginRoot } from "../lib/plugin-root.mjs";
-import { run } from "../lib/proc.mjs";
+import { run, workerNodeExecutable } from "../lib/proc.mjs";
 import { sweepAbandoned, flushSession } from "../lib/session-sweep.mjs";
 import {
   chmodSync,
@@ -387,11 +387,26 @@ function statusChangeCallback(configPath) {
   }
 }
 
+function supportedNodeVersion(version) {
+  const major = Number(String(version).match(/^v?(\d+)/)?.[1]);
+  return Number.isInteger(major) && major >= 18;
+}
+
 export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli" } = {}) {
   const project = findProject(cwd);
   const version = await run("backlog", ["--version"], { timeoutMs: 8000 });
+  const workerCommand = workerNodeExecutable();
+  const workerVersion = await run(workerCommand, ["--version"], { timeoutMs: 3000 });
   const report = {
     node: { version: process.version, execPath: process.execPath },
+    workerNode: workerVersion.ok
+      ? {
+          command: workerCommand,
+          reachable: true,
+          version: workerVersion.stdout.trim(),
+          supported: supportedNodeVersion(workerVersion.stdout.trim()),
+        }
+      : { command: workerCommand, reachable: false, reason: workerVersion.reason },
     backlog: version.ok
       ? { reachable: true, version: version.stdout.trim() }
       : { reachable: false, reason: version.reason },
@@ -403,6 +418,7 @@ export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli" } =
     git: /** @type {any} */ (null),
     cache: { path: /** @type {string | null} */ (null), snapshot: /** @type {any} */ (null) },
     hooks: { runs: {}, everRan: false },
+    ompFailures: [],
     config: /** @type {Record<string, { value: string | null, reason: string | null }> | null} */ (null),
     guard: { enabled: process.env.BACKLOG_MD_GUARD !== "0" },
     debug: { enabled: Boolean(process.env.BACKLOG_MD_DEBUG) && process.env.BACKLOG_MD_DEBUG !== "0", log: debugPath() },
@@ -415,6 +431,7 @@ export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli" } =
   report.cache.snapshot = snapshot;
   report.hooks.runs = snapshot?.hookRuns || {};
   report.hooks.everRan = Object.keys(report.hooks.runs).length > 0;
+  report.ompFailures = readRuntimeFailures(project.root);
 
   report.git = await gitHookState({
     repoRoot: project.root,
@@ -497,6 +514,13 @@ export function formatDoctor(r) {
 
   lines.push(`${mark(true)} node ${r.node.version} (${r.node.execPath})`);
   lines.push(
+    r.workerNode.reachable && r.workerNode.supported
+      ? `${mark(true)} worker node ${r.workerNode.version} via ${r.workerNode.command}`
+      : r.workerNode.reachable
+        ? `${mark(false)} worker node ${r.workerNode.version} via ${r.workerNode.command} — Node 18 or newer is required`
+        : `${mark(false)} worker node '${r.workerNode.command}' not reachable (${r.workerNode.reason}) — set BACKLOG_MD_NODE to a Node 18+ executable reachable by OMP and git hooks`,
+  );
+  lines.push(
     r.guard.enabled
       ? `${mark(true)} guard enabled — hand-edits of Backlog.md files are denied`
       : `${mark(true)} guard disabled (BACKLOG_MD_GUARD=0) — hand-edits are warned about, not blocked`,
@@ -535,6 +559,11 @@ export function formatDoctor(r) {
   }
 
   if (r.cache.path) lines.push(`${mark(true)} cache ${r.cache.path}`);
+  for (const failure of r.ompFailures ?? []) {
+    const operation = String(failure.operation).replace(/^OMP\s+/, "");
+    const scope = failure.scope ? ` [session ${failure.scope}]` : "";
+    lines.push(`${mark(false)} OMP ${operation}${scope} failed at ${failure.at}: ${failure.message}`);
+  }
 
   if (r.config) lines.push(...configLines(r.config));
 
@@ -564,16 +593,16 @@ export function formatDoctor(r) {
     }
   }
 
-  // The one thing doctor cannot test directly: whether Claude Code's hook
-  // environment finds node at all. A hook that ran records it, so absence is
-  // the symptom — but only once a project exists to write that cache in.
+  // Hook executions are separate processes. Their cache record proves they
+  // ran; its absence does not identify a cause, so keep it distinct from the
+  // worker-node probe above.
   if (r.project.found) {
     lines.push(
       r.hooks.everRan
         ? `${mark(true)} hooks have run: ${Object.entries(r.hooks.runs)
             .map(([k, v]) => `${k} at ${v}`)
             .join(", ")}`
-        : `${mark(false)} no hook has recorded a run for this session — if this persists after a fresh session, node is likely not on PATH in the hook environment (version managers such as mise or asdf shim it into interactive shells only)`,
+        : `${mark(false)} no hook has recorded a run for this session — after a fresh session, inspect host hook configuration and the worker-node result above`,
     );
   }
 
@@ -591,11 +620,13 @@ async function main() {
   if (command === "setup") {
     const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
     const cli = join(pluginRoot, "scripts", "backlog-cc.mjs");
+    const workerNode = JSON.stringify(workerNodeExecutable());
+    const quotedCli = JSON.stringify(cli);
     process.stdout.write(formatDoctor(await collectDoctor({ sessionId: process.env.CLAUDE_CODE_SESSION_ID })) + "\n\n");
     process.stdout.write(
       "Git hooks — optional, local to this clone, nothing changes for teammates:\n" +
-        `  node ${cli} install-hooks\n` +
-        `  node ${cli} install-hooks --shared   # writes .githooks/ and sets core.hooksPath\n`,
+        `  ${workerNode} ${quotedCli} install-hooks\n` +
+        `  ${workerNode} ${quotedCli} install-hooks --shared   # writes .githooks/ and sets core.hooksPath\n`,
     );
     return;
   }

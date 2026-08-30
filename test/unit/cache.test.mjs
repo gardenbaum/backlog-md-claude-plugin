@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdtempSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,8 +15,12 @@ import {
   readJournal,
   deriveSession,
   stateBase,
+  runtimeHealthPath,
+  readRuntimeFailures,
+  recordRuntimeFailure,
+  createRuntimeFailureState,
+  clearRuntimeFailure,
 } from "../../lib/cache.mjs";
-
 const repo = () => mkdtempSync(join(tmpdir(), "bcc-repo-"));
 
 test("lexical and canonical repository paths share one session directory", () => {
@@ -74,6 +78,82 @@ test("updateCache merges into an existing snapshot", () => {
 test("updateCache creates a snapshot when none exists", () => {
   const root = repo();
   assert.deepEqual(updateCache(root, "s", { a: 1 }), { a: 1 });
+});
+
+test("OMP runtime health keeps a bounded list of unresolved failures", () => {
+  const root = repo();
+  for (let i = 0; i < 20; i += 1) recordRuntimeFailure(root, `operation-${i}`, new Error(`failure-${i}`), i);
+  const failures = readRuntimeFailures(root);
+  assert.equal(failures.length, 16);
+  assert.equal(failures[0].operation, "operation-4");
+  assert.equal(failures.at(-1).message, "failure-19");
+  assert.ok(runtimeHealthPath(root).startsWith(cacheDir(root)));
+  assert.ok(!runtimeHealthPath(root).startsWith(root));
+});
+
+test("only a newer successful OMP attempt clears an unresolved failure", () => {
+  const root = repo();
+  recordRuntimeFailure(root, "session context", new Error("send failed"), 200);
+  assert.equal(clearRuntimeFailure(root, "session context", 100), false);
+  assert.equal(readRuntimeFailures(root).length, 1);
+  assert.equal(clearRuntimeFailure(root, "session context", 200), true);
+  assert.deepEqual(readRuntimeFailures(root), []);
+});
+
+test("a success in one OMP session cannot clear another session's failure", () => {
+  const root = repo();
+  recordRuntimeFailure(root, "tool guard", new Error("session B failed"), 200, "session-b");
+  assert.equal(clearRuntimeFailure(root, "tool guard", 300, "session-a"), false);
+  assert.equal(readRuntimeFailures(root)[0].scope, "session-b");
+  assert.equal(clearRuntimeFailure(root, "tool guard", 300, "session-b"), true);
+});
+
+test("runtime failure state resolves successful attempts from its in-memory snapshot", () => {
+  const root = repo();
+  const health = createRuntimeFailureState(root);
+  assert.equal(health.record("tool recording", new Error("record failed"), 100, "session"), true);
+  rmSync(runtimeHealthPath(root), { force: true });
+  assert.equal(health.clear("tool recording", 100, "session"), true);
+});
+
+test("separately hydrated OMP health states preserve unrelated failures", () => {
+  const root = repo();
+  const first = createRuntimeFailureState(root);
+  const second = createRuntimeFailureState(root);
+
+  assert.equal(first.record("tool guard", new Error("first failed"), 100, "first"), true);
+  assert.equal(second.record("tool recording", new Error("second failed"), 200, "second"), true);
+  assert.deepEqual(
+    readRuntimeFailures(root)
+      .map((failure) => failure.operation)
+      .sort(),
+    ["tool guard", "tool recording"],
+  );
+
+  assert.equal(second.clear("tool recording", 200, "second"), true);
+  assert.deepEqual(
+    readRuntimeFailures(root).map((failure) => failure.operation),
+    ["tool guard"],
+  );
+});
+
+test("a contended OMP health lock drops the best-effort update promptly", () => {
+  const root = repo();
+  recordRuntimeFailure(root, "existing failure", new Error("already recorded"), 1, "existing");
+  const lockPath = `${runtimeHealthPath(root)}.lock`;
+  writeFileSync(lockPath, "held", { flag: "wx" });
+  try {
+    const health = createRuntimeFailureState(root);
+    const startedAt = performance.now();
+    assert.equal(health.record("contended failure", new Error("must not block"), 2, "contended"), false);
+    assert.ok(performance.now() - startedAt < 100, "health contention must not stall a tool path");
+    assert.deepEqual(
+      readRuntimeFailures(root).map((failure) => failure.operation),
+      ["existing failure"],
+    );
+  } finally {
+    rmSync(lockPath, { force: true });
+  }
 });
 
 test("clearCache removes the snapshot and is safe to repeat", () => {

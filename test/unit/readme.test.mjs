@@ -29,6 +29,13 @@ test("the README states the same minimum Node version as package.json engines", 
   assert.match(readme, new RegExp(`Node ${floor} or newer`));
 });
 
+test("the README documents OMP worker, mounted-tool, and command-shadow behavior", () => {
+  assert.match(readme, /BACKLOG_MD_NODE/);
+  assert.match(readme, /write xd:\/\/…/);
+  assert.match(readme, /extension commands before file commands/);
+  assert.match(readme, /unresolved\s+runtime failures/);
+});
+
 // The directories that dangled were the ones the README named as live. Any
 // repository path it points at has to exist, whatever the path happens to be.
 test("no repository path the README names dangles", () => {

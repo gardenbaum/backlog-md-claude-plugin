@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadCommandTemplates, renderCommandTemplate } from "../lib/commands.mjs";
+import { COMMAND_NAMES, loadCommandTemplate, renderCommandTemplate } from "../lib/commands.mjs";
+import { createRuntimeFailureState } from "../lib/cache.mjs";
 import {
   evaluateToolGuard,
   flushSession,
@@ -11,13 +12,26 @@ import {
   toolTargetPaths,
 } from "../lib/integration.mjs";
 import { notice } from "../lib/render.mjs";
+import { findProject } from "../lib/paths.mjs";
 
-const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const installedPluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 function sessionId(ctx) {
-  return String(ctx.sessionManager.getSessionId() ?? "");
+  try {
+    return String(ctx?.sessionManager?.getSessionId?.() ?? "");
+  } catch {
+    return "";
+  }
 }
 
+function hasSessionManager(ctx) {
+  return typeof ctx?.sessionManager?.getSessionId === "function";
+}
+/**
+ * @param {string} customType
+ * @param {import("@oh-my-pi/pi-coding-agent").CustomMessageContent} content
+ * @returns {import("@oh-my-pi/pi-coding-agent").CustomMessagePayload}
+ */
 function contextMessage(customType, content) {
   return {
     customType,
@@ -27,17 +41,99 @@ function contextMessage(customType, content) {
   };
 }
 
-export default function backlogMdExtension(pi) {
+function hasAstEditTargetMetadata(details) {
+  return (
+    details !== null &&
+    typeof details === "object" &&
+    (Object.hasOwn(details, "files") || Object.hasOwn(details, "fileReplacements"))
+  );
+}
+
+/** @param {import("@oh-my-pi/pi-coding-agent").ExtensionAPI} pi */
+export default function backlogMdExtension(
+  pi,
+  { pluginRoot = installedPluginRoot, diagnosticCwd = process.cwd() } = {},
+) {
   const pendingPrompts = new Map();
+  const latestSuccess = new Map();
+  // Hook events can share a millisecond; health clearing needs strict attempt
+  // order so a successful no-op cannot suppress a later failure.
+  let latestAttemptStartedAt = 0;
+  const attemptStartedAt = () => {
+    latestAttemptStartedAt = Math.max(Date.now(), latestAttemptStartedAt + 1);
+    return latestAttemptStartedAt;
+  };
+
+  const projectRootByCwd = new Map();
+  const runtimeHealthByProjectRoot = new Map();
+  const registrationContext = {
+    cwd: diagnosticCwd,
+    sessionManager: { getSessionId: () => "" },
+  };
+
+  const projectRootFor = (cwd) => {
+    if (typeof cwd !== "string" || !cwd) return null;
+    if (!projectRootByCwd.has(cwd)) projectRootByCwd.set(cwd, findProject(cwd)?.root ?? null);
+    return projectRootByCwd.get(cwd);
+  };
+
+  const healthFor = (ctx, hydrate = false) => {
+    const projectRoot = projectRootFor(ctx?.cwd);
+    if (!projectRoot) return null;
+    let health = runtimeHealthByProjectRoot.get(projectRoot);
+    if (!health && hydrate) {
+      health = createRuntimeFailureState(projectRoot);
+      runtimeHealthByProjectRoot.set(projectRoot, health);
+    }
+    return health ?? null;
+  };
+
+  // Command and hook registration happen before session_start, so hydrate the
+  // ambient project once here; each later session root hydrates at its start.
+  healthFor(registrationContext, true);
+
+  const report = (operation, error, ctx, startedAt = attemptStartedAt()) => {
+    const scope = ctx ? sessionId(ctx) : "";
+    const key = `${scope}\0${operation}`;
+    const health = healthFor(ctx, true);
+    if (health && (latestSuccess.get(key) ?? -Infinity) < startedAt) {
+      health.record(operation, error, startedAt, scope);
+    }
+    try {
+      pi.logger.warn(`Backlog.md ${operation} failed`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } catch {
+      // The bounded health state above is the diagnostic fallback.
+    }
+  };
+
+  const clearFailure = (operation, ctx, startedAt) => {
+    if (!ctx?.cwd) return;
+    const scope = sessionId(ctx);
+    const key = `${scope}\0${operation}`;
+    latestSuccess.set(key, Math.max(latestSuccess.get(key) ?? -Infinity, startedAt));
+    healthFor(ctx)?.clear(operation, startedAt, scope);
+  };
+
   pi.setLabel("Backlog.md");
 
-  const report = (operation, error) => {
-    pi.logger.warn(`Backlog.md ${operation} failed`, {
-      error: error instanceof Error ? error.message : String(error),
-    });
+  const observePrompt = (prompt, ctx, id) => {
+    const startedAt = attemptStartedAt();
+    return promptContext({ cwd: ctx.cwd, sessionId: id, prompt }).then(
+      (content) => {
+        clearFailure("prompt observation", ctx, startedAt);
+        return content;
+      },
+      (error) => {
+        report("prompt observation", error, ctx, startedAt);
+        return null;
+      },
+    );
   };
 
   const sendSessionContext = async (eventName, ctx) => {
+    const startedAt = attemptStartedAt();
     try {
       const content = await sessionContext({
         cwd: ctx.cwd,
@@ -45,56 +141,63 @@ export default function backlogMdExtension(pi) {
         event: eventName,
       });
       if (content) pi.sendMessage(contextMessage("backlog-md.context", content), { deliverAs: "nextTurn" });
+      clearFailure(eventName, ctx, startedAt);
     } catch (error) {
-      report(eventName, error);
+      report(eventName, error, ctx, startedAt);
     }
   };
 
   pi.on("session_start", async (_event, ctx) => {
+    healthFor(ctx, true);
+    const supportsSessionManager = hasSessionManager(ctx);
+    const id = sessionId(ctx);
+    if (!supportsSessionManager) {
+      report("OMP session manager contract", new Error("sessionManager.getSessionId is unavailable"), ctx);
+    }
     pendingPrompts.clear();
     await sendSessionContext("OMP session_start", ctx);
+    const startedAt = attemptStartedAt();
+    // OMP's session_start begins a process even when it resumes the same
+    // session id. Existing state under that id therefore belongs to the dead
+    // predecessor and must bypass the abandoned-age threshold.
     sweepSessions({
       cwd: ctx.cwd,
-      sessionId: sessionId(ctx),
+      sessionId: id,
       pluginRoot,
-      source: "resume",
-      nodeExecutable: "node",
+      source: supportsSessionManager ? "resume" : "unknown",
+      onError: (error) => report("session sweep worker", error, ctx, startedAt),
+      onSpawn: () => clearFailure("session sweep worker", ctx, startedAt),
     });
   });
 
-  for (const eventName of ["session_switch", "session_branch", "session_tree", "session_compact"]) {
-    pi.on(eventName, async (_event, ctx) => {
-      pendingPrompts.clear();
-      await sendSessionContext(`OMP ${eventName}`, ctx);
-    });
-  }
+  const sendLifecycleContext = async (eventName, ctx) => {
+    pendingPrompts.clear();
+    await sendSessionContext(`OMP ${eventName}`, ctx);
+  };
+  pi.on("session_switch", async (_event, ctx) => sendLifecycleContext("session_switch", ctx));
+  pi.on("session_branch", async (_event, ctx) => sendLifecycleContext("session_branch", ctx));
+  pi.on("session_tree", async (_event, ctx) => sendLifecycleContext("session_tree", ctx));
+  pi.on("session_compact", async (_event, ctx) => sendLifecycleContext("session_compact", ctx));
 
   pi.on("input", (event, ctx) => {
     const id = sessionId(ctx);
-    pendingPrompts.set(
-      id,
-      promptContext({ cwd: ctx.cwd, sessionId: id, prompt: event.text }).catch((error) => {
-        report("prompt observation", error);
-        return null;
-      }),
-    );
+    pendingPrompts.set(id, {
+      prompt: event.text,
+      promise: observePrompt(event.text, ctx, id),
+    });
   });
 
   pi.on("before_agent_start", async (event, ctx) => {
     const id = sessionId(ctx);
-    let pending = pendingPrompts.get(id);
+    const pending = pendingPrompts.get(id);
     pendingPrompts.delete(id);
-    if (!pending) {
-      pending = promptContext({ cwd: ctx.cwd, sessionId: id, prompt: event.prompt }).catch((error) => {
-        report("prompt observation", error);
-        return null;
-      });
-    }
-    const content = await pending;
+    const observation = pending?.prompt === event.prompt ? pending.promise : observePrompt(event.prompt, ctx, id);
+    const content = await observation;
     if (content) return { message: contextMessage("backlog-md.observation", content) };
   });
 
   pi.on("tool_call", (event, ctx) => {
+    const startedAt = attemptStartedAt();
     try {
       const result = evaluateToolGuard({
         cwd: ctx.cwd,
@@ -102,8 +205,14 @@ export default function backlogMdExtension(pi) {
         toolInput: event.input,
         guard: process.env.BACKLOG_MD_GUARD,
       });
-      if (!result) return;
-      if (result.block) return { block: true, reason: result.reason };
+      if (!result) {
+        clearFailure("tool guard", ctx, startedAt);
+        return;
+      }
+      if (result.block) {
+        clearFailure("tool guard", ctx, startedAt);
+        return { block: true, reason: result.reason };
+      }
 
       pi.sendMessage(
         contextMessage(
@@ -112,24 +221,30 @@ export default function backlogMdExtension(pi) {
         ),
         { deliverAs: "nextTurn" },
       );
+      clearFailure("tool guard", ctx, startedAt);
     } catch (error) {
-      report("tool guard", error);
+      report("tool guard", error, ctx, startedAt);
     }
   });
 
   pi.on("tool_result", (event, ctx) => {
+    const startedAt = attemptStartedAt();
     try {
       const id = sessionId(ctx);
       const toolName = String(event.toolName).toLowerCase();
       const devicePath = event.input?.path;
-      const resolution = event.details?.xdev?.inner;
+      const xdevDetails = /** @type {{ xdev?: { inner?: Record<string, unknown> } } | undefined} */ (event.details);
+      const resolution = xdevDetails?.xdev?.inner;
       if (toolName === "write" && (devicePath === "xd://resolve" || devicePath === "xd://reject")) {
-        if (
-          !event.isError &&
-          devicePath === "xd://resolve" &&
-          resolution?.action === "apply" &&
-          resolution?.sourceToolName === "ast_edit"
-        ) {
+        if (resolution?.sourceToolName !== "ast_edit") return;
+        const expectedAction = devicePath === "xd://resolve" ? "apply" : "discard";
+        if (!event.isError && resolution.action !== expectedAction) {
+          throw new Error(`unexpected ${devicePath} ast_edit resolution metadata`);
+        }
+        if (!event.isError && devicePath === "xd://resolve") {
+          if (!hasAstEditTargetMetadata(resolution.sourceResultDetails)) {
+            throw new Error("ast_edit resolution did not report changed-file metadata");
+          }
           const targets = toolTargetPaths({}, resolution.sourceResultDetails);
           if (targets.length > 0) {
             recordToolActivity({
@@ -137,9 +252,11 @@ export default function backlogMdExtension(pi) {
               sessionId: id,
               toolName: "write",
               toolInput: { files: targets },
+              toolDetails: resolution.sourceResultDetails,
             });
           }
         }
+        clearFailure("tool recording", ctx, startedAt);
         return;
       }
       recordToolActivity({
@@ -150,26 +267,39 @@ export default function backlogMdExtension(pi) {
         toolDetails: event.details,
         isError: event.isError,
       });
+      clearFailure("tool recording", ctx, startedAt);
     } catch (error) {
-      report("tool recording", error);
+      report("tool recording", error, ctx, startedAt);
     }
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
-    flushSession({
+  pi.on("session_shutdown", async (_event, ctx) => {
+    const startedAt = attemptStartedAt();
+    await flushSession({
       cwd: ctx.cwd,
       sessionId: sessionId(ctx),
       pluginRoot,
-      nodeExecutable: "node",
+      onError: (error) => report("session flush worker", error, ctx, startedAt),
+      onSpawn: () => clearFailure("session flush worker", ctx, startedAt),
     });
   });
 
-  for (const template of loadCommandTemplates(pluginRoot)) {
-    pi.registerCommand(`backlog-md:${template.name}`, {
-      description: template.description,
-      handler: async (args) => {
-        pi.sendUserMessage(renderCommandTemplate(template, pluginRoot, args));
-      },
-    });
+  // OMP dispatches extension commands before file commands, so these handlers
+  // are the one effective implementation even though its Claude-plugin
+  // compatibility provider also discovers commands/*.md from the package.
+  for (const name of COMMAND_NAMES) {
+    const startedAt = attemptStartedAt();
+    try {
+      const template = loadCommandTemplate(pluginRoot, name);
+      pi.registerCommand(`backlog-md:${template.name}`, {
+        description: template.description,
+        handler: async (args) => {
+          pi.sendUserMessage(renderCommandTemplate(template, pluginRoot, args));
+        },
+      });
+      clearFailure(`command ${name} registration`, registrationContext, startedAt);
+    } catch (error) {
+      report(`command ${name} registration`, error, registrationContext, startedAt);
+    }
   }
 }
