@@ -27,6 +27,6 @@
     "@biomejs/biome": "2.5.10",
     "@oh-my-pi/pi-coding-agent": "18.0.10",
     "@types/node": "24.13.3",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   }
 }
