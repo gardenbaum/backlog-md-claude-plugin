@@ -5,11 +5,11 @@ import { resolveActiveTask } from "../lib/active-task.mjs";
 import { createRuntimeFailureState } from "../lib/cache.mjs";
 import {
   evaluateToolGuard,
-  flushSession,
   promptContext,
   recordSessionMetric,
   recordToolActivity,
   sessionContext,
+  spawnFlush,
   sweepSessions,
   toolTargetPaths,
 } from "../lib/integration.mjs";
@@ -364,12 +364,14 @@ export default function backlogMdExtension(
       if ("task" in active) {
         recordSessionMetric({ cwd: ctx.cwd, sessionId: id, name: "unfinished-session" });
       }
-      await flushSession({
+      await spawnFlush({
         cwd: ctx.cwd,
         sessionId: id,
         pluginRoot,
         onError: (error) => report("session flush worker", error, ctx, startedAt),
         onSpawn: () => clearFailure("session flush worker", ctx, startedAt),
+        onSummary: (error) =>
+          error ? report("session summary", error, ctx, startedAt) : clearFailure("session summary", ctx, startedAt),
       });
     } catch (error) {
       report("session shutdown", error, ctx, startedAt);

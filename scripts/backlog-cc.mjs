@@ -435,7 +435,7 @@ export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli", ho
     guard: { enabled: process.env.BACKLOG_MD_GUARD !== "0" },
     debug: { enabled: Boolean(process.env.BACKLOG_MD_DEBUG) && process.env.BACKLOG_MD_DEBUG !== "0", log: debugPath() },
     installations:
-      /** @type {{ paths: { installPath: string, versions: string[], sources: string[] }[], duplicate: boolean }} */ ({
+      /** @type {{ paths: { installPath: string, versions: string[], sources: string[], present: boolean }[], duplicate: boolean }} */ ({
         paths: [],
         duplicate: false,
       }),
@@ -448,6 +448,10 @@ export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli", ho
       installPath: installation.installPath,
       versions: [],
       sources: [],
+      // Registry entries outlive their directory: `omp plugin uninstall`
+      // removes the shared marketplace copy even while a second scope still
+      // points at it, and reports the survivor as installed (BCC-5).
+      present: existsSync(installation.installPath),
     };
     if (!known.versions.includes(installation.version)) known.versions.push(installation.version);
     if (!known.sources.includes(installation.source)) known.sources.push(installation.source);
@@ -469,15 +473,22 @@ export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli", ho
   // Still-open sessions are read from their journals, finished ones from the
   // summary their shutdown froze — without both, the report shows counters
   // only for sessions that never cleaned up after themselves.
-  const live = listSessions(project.root).map(({ sessionId: id }) => ({
+  const live = listSessions(project.root).map(({ sessionId: id, mtimeMs }) => ({
     sessionId: id,
+    at: mtimeMs,
     metrics: deriveSession(project.root, id).metrics,
   }));
   const open = new Set(live.map((session) => session.sessionId));
   const ended = listSessionSummaries(project.root)
     .filter((session) => !open.has(session.sessionId))
+    .map(({ sessionId: id, endedAt, metrics }) => ({ sessionId: id, at: endedAt, metrics }));
+  // Merged by time, not by source: a handful of journals left behind by
+  // crashed sessions would otherwise fill the report and hide every session
+  // that ended properly.
+  report.sessionMetrics = [...live, ...ended]
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 5)
     .map(({ sessionId: id, metrics }) => ({ sessionId: id, metrics }));
-  report.sessionMetrics = [...live, ...ended].slice(0, 5);
 
   report.git = await gitHookState({
     repoRoot: project.root,
@@ -583,19 +594,21 @@ export function formatDoctor(r) {
   );
 
   const installs = r.installations?.paths ?? [];
+  const gone = (install) =>
+    install.present === false ? " — registered but the directory is gone; reinstall with --force" : "";
   if (r.installations?.duplicate) {
     lines.push(
       `${mark(false)} Backlog.md is active from ${installs.length} distinct plugin paths — use the same marketplace name in Claude Code and OMP so OMP can replace Claude's matching plugin id`,
     );
     for (const install of installs) {
       lines.push(
-        `${mark(false)} ${install.sources.join(", ")}: ${install.installPath} (version ${install.versions.join(", ")})`,
+        `${mark(false)} ${install.sources.join(", ")}: ${install.installPath} (version ${install.versions.join(", ")})${gone(install)}`,
       );
     }
   } else if (installs.length === 1) {
     const install = installs[0];
     lines.push(
-      `${mark(true)} Backlog.md plugin ${install.installPath} (version ${install.versions.join(", ")}) via ${install.sources.join(", ")}`,
+      `${mark(install.present !== false)} Backlog.md plugin ${install.installPath} (version ${install.versions.join(", ")}) via ${install.sources.join(", ")}${gone(install)}`,
     );
   }
   if (r.statuses) {

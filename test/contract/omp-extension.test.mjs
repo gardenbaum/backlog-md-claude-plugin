@@ -15,7 +15,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import backlogMdExtension from "../../omp/index.mjs";
 import { COMMAND_NAMES } from "../../lib/commands.mjs";
-import { clearJournal, deriveSession, listSessionSummaries, readRuntimeFailures } from "../../lib/cache.mjs";
+import {
+  clearJournal,
+  deriveSession,
+  listSessionSummaries,
+  readRuntimeFailures,
+  summaryPath,
+} from "../../lib/cache.mjs";
 import { collectDoctor, formatDoctor } from "../../scripts/backlog-cc.mjs";
 import { backlogAvailable, makeProject } from "../helpers/fixture.mjs";
 
@@ -725,4 +731,47 @@ test("OMP shutdown freezes the session counters before the worker that deletes t
   const [summary] = listSessionSummaries(project.root);
   assert.equal(summary?.sessionId, "omp-summary");
   assert.equal(summary.metrics.unfinishedSessions, 1);
+});
+
+// The summary write used to report through the flush worker's callback, and a
+// worker that spawns clears every failure recorded at or before its own
+// attempt — so the entry was deleted microseconds after it was written, and a
+// full state directory or an unwritable one stayed invisible.
+test("a summary the shutdown cannot write is reported apart from the worker that succeeds", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-summary-health");
+  // A directory where the summary file belongs: the rename that publishes it
+  // fails and nothing else does, so the two channels can be told apart.
+  const blocked = summaryPath(project.root, "omp-summary-health");
+  mkdirSync(blocked, { recursive: true });
+
+  const previousNode = process.env.BACKLOG_MD_NODE;
+  process.env.BACKLOG_MD_NODE = process.execPath;
+  try {
+    await pi.events.get("session_shutdown")({}, ctx);
+    const failures = readRuntimeFailures(project.root);
+    assert.equal(
+      failures.some((failure) => failure.operation === "session summary"),
+      true,
+    );
+    assert.equal(
+      failures.some((failure) => failure.operation === "session flush worker"),
+      false,
+    );
+
+    rmSync(blocked, { recursive: true, force: true });
+    await pi.events.get("session_shutdown")({}, ctx);
+    assert.equal(
+      readRuntimeFailures(project.root).some((failure) => failure.operation === "session summary"),
+      false,
+    );
+  } finally {
+    if (previousNode === undefined) delete process.env.BACKLOG_MD_NODE;
+    else process.env.BACKLOG_MD_NODE = previousNode;
+  }
 });

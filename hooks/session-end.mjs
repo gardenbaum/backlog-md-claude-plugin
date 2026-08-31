@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readHookInput, guard } from "../lib/protocol.mjs";
-import { flushSession } from "../lib/integration.mjs";
+import { spawnFlush } from "../lib/integration.mjs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,7 +16,7 @@ guard(
   async () => {
     const input = await readHookInput();
     const pluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-    flushSession({
+    spawnFlush({
       cwd: input.cwd,
       sessionId: input.session_id,
       pluginRoot,

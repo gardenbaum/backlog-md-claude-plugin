@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendEvent, journalPath, listSessions } from "../../lib/cache.mjs";
+import { appendEvent, journalPath, listSessions, listSessionSummaries } from "../../lib/cache.mjs";
 import { ABANDONED_AFTER_MS, includesSelf, sweepAbandoned } from "../../lib/session-sweep.mjs";
 
 // Keep every session file this test writes inside a temp directory rather than
@@ -136,4 +136,39 @@ test("only a starting process may sweep its own session id", () => {
   assert.equal(includesSelf("clear"), false);
   assert.equal(includesSelf("compact"), false);
   assert.equal(includesSelf(undefined), false);
+});
+
+// A killed session never reaches the shutdown that freezes its counters, so
+// the sweep is the last place they exist at all.
+test("a swept session leaves its counters behind, stamped with its last heartbeat", async () => {
+  const root = repo();
+  appendEvent(root, "dead-session", { t: "metric", name: "guard" });
+  appendEvent(root, "dead-session", { t: "metric", name: "tool", tool: "backlog_next" });
+  const path = journalPath(root, "dead-session");
+  const when = new Date(Date.now() - 2 * ABANDONED_AFTER_MS);
+  utimesSync(path, when, when);
+
+  const result = await sweepAbandoned({ repoRoot: root, sessionId: "live" });
+  assert.deepEqual(result.swept, ["dead-session"]);
+  assert.equal(existsSync(path), false);
+
+  const [summary] = listSessionSummaries(root);
+  assert.equal(summary.sessionId, "dead-session");
+  assert.equal(summary.metrics.guards, 1);
+  assert.deepEqual(summary.metrics.toolCalls, { backlog_next: 1 });
+  // Half an hour of lying dead is not part of the session: the summary is
+  // stamped with the last heartbeat, not with the sweep that found it.
+  assert.ok(Math.abs(summary.endedAt - when.getTime()) < 2000, `endedAt ${summary.endedAt} vs ${when.getTime()}`);
+});
+
+// On a resume the id is reused, so the journal being swept is a predecessor's
+// while the summary path belongs to the session that is starting.
+test("the resumed session's own id is left for its shutdown to summarise", async () => {
+  const root = repo();
+  appendEvent(root, "live", { t: "metric", name: "guard" });
+
+  const result = await sweepAbandoned({ repoRoot: root, sessionId: "live", includeSelf: true });
+  assert.deepEqual(result.swept, ["live"]);
+  assert.equal(existsSync(journalPath(root, "live")), false);
+  assert.deepEqual(listSessionSummaries(root), []);
 });

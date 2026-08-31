@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -8,12 +8,14 @@ import { collectDoctor, formatDoctor, HOOK_MARKER, HOOK_NAMES } from "../../scri
 import {
   appendEvent,
   clearJournal,
+  journalPath,
   recordRuntimeFailure,
   stateBase,
   writeCache,
   writeSessionSummary,
 } from "../../lib/cache.mjs";
 import { run } from "../../lib/proc.mjs";
+import { ABANDONED_AFTER_MS, sweepAbandoned } from "../../lib/session-sweep.mjs";
 
 // This repository's own root — a hint that really does resolve, which is what
 // the core.hooksPath tests below need their hooks to carry.
@@ -117,6 +119,53 @@ test("Doctor reports counters for a session whose flush already removed its jour
   ]);
 });
 
+// Five journals left behind by sessions that crashed an hour ago used to fill
+// the report and hide every session that ended properly, because open journals
+// were merged ahead of stored summaries regardless of age.
+test("Doctor reports the most recent sessions, not every open journal first", async () => {
+  const root = projectDir();
+  const aged = Date.now() / 1000 - 3600;
+  for (let index = 0; index < 5; index += 1) {
+    appendEvent(root, `stale-${index}`, { t: "metric", name: "guard" });
+    utimesSync(journalPath(root, `stale-${index}`), aged, aged);
+  }
+  appendEvent(root, "finished", { t: "metric", name: "acceptance-check" });
+  writeSessionSummary(root, "finished");
+  clearJournal(root, "finished");
+
+  const report = await collectDoctor({ cwd: root, sessionId: "s" });
+  assert.equal(report.sessionMetrics.length, 5);
+  assert.equal(report.sessionMetrics[0].sessionId, "finished");
+  assert.equal(report.sessionMetrics[0].metrics.acceptanceChecks, 1);
+});
+
+// End to end for the path a killed session takes: the sweep freezes its
+// counters into a summary, and the report reads them from there.
+test("Doctor reports the counters of a session the sweep collected", async () => {
+  const root = projectDir();
+  appendEvent(root, "killed-session", { t: "metric", name: "steering" });
+  const when = new Date(Date.now() - 2 * ABANDONED_AFTER_MS);
+  utimesSync(journalPath(root, "killed-session"), when, when);
+
+  const swept = await sweepAbandoned({ repoRoot: root, sessionId: "live" });
+  assert.deepEqual(swept.swept, ["killed-session"]);
+
+  const report = await collectDoctor({ cwd: root, sessionId: "live" });
+  assert.deepEqual(report.sessionMetrics, [
+    {
+      sessionId: "killed-session",
+      metrics: {
+        guards: 0,
+        toolCalls: {},
+        acceptanceChecks: 0,
+        unplannedStarts: 0,
+        unfinishedSessions: 0,
+        steeringMessages: 1,
+      },
+    },
+  ]);
+});
+
 test("the report probes the configured worker Node separately from its host runtime", async () => {
   const original = process.env.BACKLOG_MD_NODE;
   const root = projectDir();
@@ -158,6 +207,45 @@ test("the report locates the project when there is one", async () => {
 test("the report says so plainly when there is no project", async () => {
   const r = await collectDoctor({ cwd: mkdtempSync(join(tmpdir(), "bcc-none-")), sessionId: "s" });
   assert.equal(r.project.found, false);
+});
+
+// What `omp plugin install --scope project` writes: the registry entry lives
+// in the project while the copy stays in the user cache, and `omp plugin
+// uninstall` in the other scope removes that copy without touching this entry
+// — so a registered path that no longer exists is a state Doctor has to name
+// (BCC-5, measured against OMP 18.0.11).
+test("Doctor reports a project-scope installation and fails once its directory is gone", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bcc-doctor-project-home-"));
+  const root = projectDir();
+  const installed = mkdtempSync(join(tmpdir(), "bcc-doctor-install-"));
+  const registry = join(root, ".omp", "plugins", "installed_plugins.json");
+  mkdirSync(dirname(registry), { recursive: true });
+  writeFileSync(
+    registry,
+    JSON.stringify({
+      version: 2,
+      plugins: { "backlog-md@gardenbaum": [{ scope: "project", installPath: installed, version: "0.3.0" }] },
+    }),
+  );
+
+  try {
+    const report = await collectDoctor({ cwd: root, sessionId: "s", home });
+    assert.deepEqual(report.installations.paths, [
+      { installPath: installed, versions: ["0.3.0"], sources: ["project registry"], present: true },
+    ]);
+    const output = formatDoctor(report);
+    assert.match(output, new RegExp(`Backlog\\.md plugin ${installed} \\(version 0\\.3\\.0\\) via project registry`));
+    assert.doesNotMatch(output, /directory is gone/);
+
+    rmSync(installed, { recursive: true, force: true });
+    const dangling = await collectDoctor({ cwd: root, sessionId: "s", home });
+    assert.equal(dangling.installations.paths[0].present, false);
+    assert.match(formatDoctor(dangling), /FAIL Backlog\.md plugin[\s\S]*directory is gone/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+    rmSync(installed, { recursive: true, force: true });
+  }
 });
 
 test("Doctor fails on active Backlog installations from distinct registries", async () => {

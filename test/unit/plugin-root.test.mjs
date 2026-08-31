@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pluginRootCandidates, resolvePluginRoot } from "../../lib/plugin-root.mjs";
 
 /** A directory that looks like an installed copy of this plugin. */
@@ -50,6 +50,30 @@ test("the nearest project-scoped OMP install outranks user installs", () => {
     const projectPlugin = fakePlugin(join(workspace, ".omp", "plugins", "node_modules"), "backlog-md");
     fakePlugin(join(home, ".omp", "plugins", "node_modules"), "backlog-md");
     assert.equal(resolvePluginRoot({ env: {}, home, cwd: join(workspace, "src") }), projectPlugin);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// The layout `omp plugin install --scope project` really writes: one shared
+// copy in the user cache, a registry entry in the project, and a symlink under
+// the project's node_modules joining them. The user-scope install links to the
+// same copy, so only the walk order tells them apart — and OMP agrees, marking
+// the user entry `shadowedBy: "project"` (BCC-5, measured against 18.0.11).
+test("a project install that is a symlink into the user cache still outranks the user install", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "bcc-omp-link-project-"));
+  const home = mkdtempSync(join(tmpdir(), "bcc-omp-link-home-"));
+  try {
+    const cached = fakePlugin(join(home, ".omp", "plugins", "cache", "plugins"), "gardenbaum___backlog-md___0.3.0");
+    const userLink = join(home, ".omp", "plugins", "node_modules", "backlog-md");
+    mkdirSync(dirname(userLink), { recursive: true });
+    symlinkSync(cached, userLink);
+    const link = join(workspace, ".omp", "plugins", "node_modules", "backlog-md");
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(cached, link);
+
+    assert.equal(resolvePluginRoot({ env: {}, home, cwd: join(workspace, "src") }), link);
   } finally {
     rmSync(workspace, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });

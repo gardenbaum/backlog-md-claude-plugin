@@ -56,6 +56,16 @@ The package exposes Claude Code's command-hook manifest and OMP's native
 `package.json#omp.extensions` entry point side by side. Neither installation
 path needs generated files or a host-specific package.
 
+`--scope project` is supported and behaves as the hook resolution below
+expects: the registry entry goes to `<project>/.omp/plugins/installed_plugins.json`,
+the copy itself stays in the shared user cache, and the two are joined by a
+symlink at `<project>/.omp/plugins/node_modules/backlog-md`. OMP marks a
+user-scope entry of the same plugin `shadowedBy: "project"`, which is the order
+this plugin resolves in as well. One caveat measured on OMP 18.0.11: uninstalling
+either scope deletes the shared copy even while the other scope still points at
+it, leaving a registry entry whose directory is gone — `/backlog-md:doctor` names
+that state, and `omp plugin install … --force` repairs it.
+
 OMP's Claude-plugin compatibility provider also discovers the Markdown command
 files. The native extension deliberately registers each name once, and OMP
 dispatches extension commands before file commands, so there is one effective
@@ -292,9 +302,12 @@ reads.
 - The behavior counters `backlog-cc doctor` reports are derived from the same
   journal the flush removes, so a session that ends cleanly is frozen into a
   small `<session>.metrics` file beside it, written at shutdown before the
-  flush worker is spawned. Only the newest twenty are kept, and a session that
-  is killed outright never writes one: its counters go with its journal at the
-  next sweep.
+  flush worker is spawned. Only the newest twenty are kept. A session that is
+  killed outright never writes one itself; the sweep that collects its journal
+  writes it instead, stamped with the session's last heartbeat rather than with
+  the sweep — so those counters show up one session later. The exception is a
+  resumed id: the sweep leaves that one to the live session's own shutdown, and
+  a killed predecessor's counters go with the journal.
 - Claude Code injects nothing *before* a compaction, only after it. The plugin
   used to register a `PreCompact` hook for that, and Claude Code 2.1.238
   rejects its output: `hookSpecificOutput` has no `PreCompact` variant, so the
@@ -352,6 +365,13 @@ extension-module capability, so `omp/index.mjs` is not loaded from an injected
 root. The runner adds `--no-extensions -e <root>/omp/index.mjs` to measure the
 work tree's extension rather than an installed copy. A run that records no
 session state is reported with `ok: false` and `metrics: null` instead of zeros.
+
+Since every shutdown writes a summary, the absence of one and a summary of
+zeros mean different things, and the report keeps them apart. No summary means
+the run never reached its shutdown — the extension was not loaded, or the
+process died first — and nothing was measured: `ok: false`. A summary whose
+counters are zero is a measurement: the extension ran and the model never
+touched the tools. Read zeros as a result, not as a defect.
 
 
 Comments in this repository carry the reasoning, not just the what: a comment

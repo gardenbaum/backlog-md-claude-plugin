@@ -207,8 +207,13 @@ async function evaluate(task, model, config) {
         "--plugin-dir",
         root,
         // `--plugin-dir` publishes commands, skills, rules, agents and MCP from
-        // the work tree, but OMP's plugin providers register no extension-module
-        // capability, so omp/index.mjs is never discovered from an injected root.
+        // the work tree, but an extension module is read only from a registry
+        // plugin's `omp.extensions` manifest field, and an injected root has no
+        // registry entry. Measured against OMP 18.0.11 (BCC-5): a project-scope
+        // registry install with that field registers all six native tools,
+        // while the same install with the field pointing at a missing file,
+        // with the field removed, or with an undeclared `extensions/` directory
+        // loads nothing at all — there is no conventional folder scan.
         // Disabling ambient discovery and naming the module keeps the measured
         // build the work tree's, not an installed copy's.
         "--no-extensions",
