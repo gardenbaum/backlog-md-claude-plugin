@@ -22,6 +22,42 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.2 — 2026-08-31
+
+- `backlog init` is refused when the directory already belongs to a Backlog.md
+  project. It replaced `config.yml` with defaults — project name, statuses and
+  task prefix included — and did so silently. Both hosts route through
+  `evaluateToolGuard`; Claude Code needed `Bash` in the `PreToolUse` matcher,
+  OMP already forwarded every tool. The refusal names the file and both ways
+  forward: `backlog config set` for one setting, moving or deleting the file
+  for a deliberate re-init. An init where no project exists passes untouched.
+- The doctor's hook check is host-aware. Claude Code keeps the cache path,
+  snapshot and `hookRuns` line; every other host gets one extension-liveness
+  line instead — ok with the age of the newest session state, FAIL when nothing
+  was ever recorded. The `cli.json` fallback session is gone, so the report can
+  no longer diagnose a session nobody writes.
+- The always-applied contract rule covers the three ways an OMP session left the
+  workflow before it started: it names `backlog_task_create` when no task
+  matches, states that the native tools supersede the Backlog.md CLI
+  instructions, and places the built-in todo list inside a task rather than
+  against it. Still under the 1000-byte ceiling.
+- A `session_stop` handler covers what end-of-turn steering structurally cannot:
+  work for which no task was ever created. A session that ends having changed
+  files outside `backlog/` with no task active and no Backlog.md engagement gets
+  one continuation naming those files and `backlog_task_create`, counted as a
+  taskless-continue metric. Once per session, and it never blocks.
+- An emptied journal can no longer overwrite counters that were already frozen.
+  `writeSessionSummary` keeps an existing summary when the derived metrics are
+  all zero, and still writes one when none exists.
+- The two OMP picker entries are distinguishable: the native registration ends
+  its description in `(native)`, the Markdown file variant does not. Both run
+  the same handler; the duplication cannot be removed, because both hosts read
+  the same `commands` key.
+- `commands/doctor.md` shortened to 44 lines while covering two more FAIL lines.
+  The README carries measured prompt-side figures for both hosts, the per-event
+  process floor behind the project-scope recommendation, and prewalk model
+  mixing as a limitation of counters read outside the evaluator.
+
 ## 0.3.1 — 2026-08-31
 
 - Native OMP interface hardened: full `/backlog-md:*` command parity, a
