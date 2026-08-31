@@ -5,7 +5,14 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { collectDoctor, formatDoctor, HOOK_MARKER, HOOK_NAMES } from "../../scripts/backlog-cc.mjs";
-import { recordRuntimeFailure, stateBase, writeCache } from "../../lib/cache.mjs";
+import {
+  appendEvent,
+  clearJournal,
+  recordRuntimeFailure,
+  stateBase,
+  writeCache,
+  writeSessionSummary,
+} from "../../lib/cache.mjs";
 import { run } from "../../lib/proc.mjs";
 
 // This repository's own root — a hint that really does resolve, which is what
@@ -53,6 +60,63 @@ test("the report names the node version it is running under", async () => {
   assert.equal(r.node.version, process.version);
 });
 
+test("Doctor renders recent per-session behavior counters", async () => {
+  const root = projectDir();
+  for (const event of [
+    { t: "metric", name: "guard" },
+    { t: "metric", name: "tool", tool: "backlog_task_plan" },
+    { t: "metric", name: "tool", tool: "backlog_task_plan" },
+    { t: "metric", name: "acceptance-check" },
+    { t: "metric", name: "unplanned-start" },
+    { t: "metric", name: "unfinished-session" },
+    { t: "metric", name: "steering" },
+  ]) {
+    appendEvent(root, "metric-session", event);
+  }
+
+  const report = await collectDoctor({ cwd: root, sessionId: "s" });
+  assert.deepEqual(report.sessionMetrics, [
+    {
+      sessionId: "metric-session",
+      metrics: {
+        guards: 1,
+        toolCalls: { backlog_task_plan: 2 },
+        acceptanceChecks: 1,
+        unplannedStarts: 1,
+        unfinishedSessions: 1,
+        steeringMessages: 1,
+      },
+    },
+  ]);
+  assert.match(
+    formatDoctor(report),
+    /recent behavior counters \(last 1 session\):[\s\S]*metric-session: guards 1; tool calls backlog_task_plan ×2; acceptance checks 1; unplanned starts 1; unfinished sessions 1; steering messages 1/i,
+  );
+});
+
+test("Doctor reports counters for a session whose flush already removed its journal", async () => {
+  const root = projectDir();
+  appendEvent(root, "flushed-session", { t: "metric", name: "acceptance-check" });
+  writeSessionSummary(root, "flushed-session");
+  // What the detached flush worker does on every terminal outcome.
+  clearJournal(root, "flushed-session");
+
+  const report = await collectDoctor({ cwd: root, sessionId: "s" });
+  assert.deepEqual(report.sessionMetrics, [
+    {
+      sessionId: "flushed-session",
+      metrics: {
+        guards: 0,
+        toolCalls: {},
+        acceptanceChecks: 1,
+        unplannedStarts: 0,
+        unfinishedSessions: 0,
+        steeringMessages: 0,
+      },
+    },
+  ]);
+});
+
 test("the report probes the configured worker Node separately from its host runtime", async () => {
   const original = process.env.BACKLOG_MD_NODE;
   const root = projectDir();
@@ -94,6 +158,40 @@ test("the report locates the project when there is one", async () => {
 test("the report says so plainly when there is no project", async () => {
   const r = await collectDoctor({ cwd: mkdtempSync(join(tmpdir(), "bcc-none-")), sessionId: "s" });
   assert.equal(r.project.found, false);
+});
+
+test("Doctor fails on active Backlog installations from distinct registries", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bcc-doctor-home-"));
+  const root = projectDir();
+  const claudePath = "/opt/claude/backlog-md/1.0.0";
+  const ompPath = "/opt/omp/backlog-md/2.0.0";
+  const writeRegistry = (path, entry) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 2, plugins: { "backlog-md@gardenbaum": [entry] } }));
+  };
+
+  try {
+    writeRegistry(join(home, ".claude", "plugins", "installed_plugins.json"), {
+      installPath: claudePath,
+      version: "1.0.0",
+      enabled: true,
+    });
+    writeRegistry(join(home, ".omp", "plugins", "installed_plugins.json"), {
+      installPath: ompPath,
+      version: "2.0.0",
+      enabled: true,
+    });
+
+    const report = await collectDoctor({ cwd: root, sessionId: "s", home });
+    assert.equal(report.installations.duplicate, true);
+    assert.match(formatDoctor(report), new RegExp(claudePath));
+    assert.match(formatDoctor(report), new RegExp(ompPath));
+    assert.match(formatDoctor(report), /1\.0\.0/);
+    assert.match(formatDoctor(report), /2\.0\.0/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("hookRuns is reported as never when no hook has recorded a run", async () => {

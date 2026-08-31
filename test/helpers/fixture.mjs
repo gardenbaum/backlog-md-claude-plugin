@@ -19,6 +19,33 @@ export function parseCliJson(result, command) {
   }
 }
 
+/**
+ * Parse a hook's stdout, naming the silent failure instead of hiding it.
+ *
+ * The hook protocol is deliberately silent when `guard()`'s watchdog fires or
+ * the stdin read times out: the process exits 0 with no stdout so the host is
+ * never handed a broken payload. `JSON.parse("")` then throws `Unexpected end
+ * of JSON input` from inside the assertion, which names the parser rather than
+ * the budget — the one diagnosis a suite failing under parallel load needs.
+ */
+export function parseHookOutput(result, hook) {
+  if (!result.stdout.trim()) {
+    const detail = [
+      result.reason ? `reason ${result.reason}` : null,
+      `exit ${result.code ?? "none"}`,
+      result.stderr.trim() ? `stderr: ${result.stderr.trim()}` : null,
+    ].filter(Boolean);
+    throw new Error(
+      `${hook} produced no stdout — its watchdog or stdin read timed out (${detail.join(", ")}). Raise BACKLOG_MD_TIMEOUT_SCALE when running under load.`,
+    );
+  }
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    throw new Error(`${hook} produced malformed JSON: ${result.stdout}`);
+  }
+}
+
 /** Create a real Backlog.md project in a temp directory. */
 export async function makeProject({ git = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "bcc-fixture-"));

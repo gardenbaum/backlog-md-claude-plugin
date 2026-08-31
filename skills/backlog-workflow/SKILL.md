@@ -1,6 +1,7 @@
 ---
 name: backlog-workflow
 description: Use when working in a repository that has a Backlog.md backlog — how to pick up, record and finish work through the CLI, what the plugin's commands do, and what a redirected write means.
+hide: true
 ---
 
 # Backlog.md workflow

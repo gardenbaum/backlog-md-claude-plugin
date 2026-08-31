@@ -1,18 +1,22 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMMAND_NAMES, loadCommandTemplate, renderCommandTemplate } from "../lib/commands.mjs";
+import { resolveActiveTask } from "../lib/active-task.mjs";
 import { createRuntimeFailureState } from "../lib/cache.mjs";
 import {
   evaluateToolGuard,
   flushSession,
   promptContext,
+  recordSessionMetric,
   recordToolActivity,
   sessionContext,
   sweepSessions,
   toolTargetPaths,
 } from "../lib/integration.mjs";
+import { correctedBacklogCommand } from "../lib/quoting.mjs";
 import { notice } from "../lib/render.mjs";
 import { findProject } from "../lib/paths.mjs";
+import { activateBacklogTools, registerBacklogTools } from "./tools.mjs";
 
 const installedPluginRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -55,9 +59,15 @@ export default function backlogMdExtension(
   { pluginRoot = installedPluginRoot, diagnosticCwd = process.cwd() } = {},
 ) {
   const pendingPrompts = new Map();
+  const acceptanceChecksBySession = new Set();
+  const steeredTasksBySession = new Map();
   const latestSuccess = new Map();
-  // Hook events can share a millisecond; health clearing needs strict attempt
-  // order so a successful no-op cannot suppress a later failure.
+  // This is a process-local ordering token, not a wall-clock timestamp. It is
+  // seeded from Date.now(), then increments when events share a millisecond or
+  // the clock moves backward. Persisted `startedAt` values compare only within
+  // this extension instance, scope, and operation; `at` remains the display
+  // timestamp. The token prevents an older async success from erasing a newer
+  // failure.
   let latestAttemptStartedAt = 0;
   const attemptStartedAt = () => {
     latestAttemptStartedAt = Math.max(Date.now(), latestAttemptStartedAt + 1);
@@ -117,6 +127,13 @@ export default function backlogMdExtension(
   };
 
   pi.setLabel("Backlog.md");
+  const toolRegistrationStartedAt = attemptStartedAt();
+  try {
+    registerBacklogTools(pi);
+    clearFailure("tool registration", registrationContext, toolRegistrationStartedAt);
+  } catch (error) {
+    report("tool registration", error, registrationContext, toolRegistrationStartedAt);
+  }
 
   const observePrompt = (prompt, ctx, id) => {
     const startedAt = attemptStartedAt();
@@ -149,8 +166,16 @@ export default function backlogMdExtension(
 
   pi.on("session_start", async (_event, ctx) => {
     healthFor(ctx, true);
+    const toolActivationStartedAt = attemptStartedAt();
+    try {
+      if (findProject(ctx.cwd)) await activateBacklogTools(pi);
+      clearFailure("tool activation", ctx, toolActivationStartedAt);
+    } catch (error) {
+      report("tool activation", error, ctx, toolActivationStartedAt);
+    }
     const supportsSessionManager = hasSessionManager(ctx);
     const id = sessionId(ctx);
+    steeredTasksBySession.set(id, new Set());
     if (!supportsSessionManager) {
       report("OMP session manager contract", new Error("sessionManager.getSessionId is unavailable"), ctx);
     }
@@ -197,13 +222,35 @@ export default function backlogMdExtension(
   });
 
   pi.on("tool_call", (event, ctx) => {
+    const toolName = String(event.toolName).toLowerCase();
+    const command = event.input && typeof event.input === "object" ? Reflect.get(event.input, "command") : undefined;
+    const directAcceptanceCheck =
+      toolName === "bash" &&
+      typeof command === "string" &&
+      /\bbacklog\s+task\s+edit\b[\s\S]*\s--check-ac\b/.test(command);
+    if (toolName === "backlog_check_ac" || directAcceptanceCheck) {
+      acceptanceChecksBySession.add(sessionId(ctx));
+      if (directAcceptanceCheck) {
+        recordSessionMetric({ cwd: ctx.cwd, sessionId: sessionId(ctx), name: "acceptance-check" });
+      }
+    }
     const startedAt = attemptStartedAt();
     try {
+      const corrected = toolName === "bash" && findProject(ctx.cwd) ? correctedBacklogCommand(command) : null;
+      if (corrected) {
+        recordSessionMetric({ cwd: ctx.cwd, sessionId: sessionId(ctx), name: "guard" });
+        clearFailure("tool guard", ctx, startedAt);
+        return {
+          block: true,
+          reason: `Unsafe shell quoting in a direct Backlog command. Use this corrected command:\n  ${corrected}`,
+        };
+      }
       const result = evaluateToolGuard({
         cwd: ctx.cwd,
         toolName: event.toolName,
         toolInput: event.input,
         guard: process.env.BACKLOG_MD_GUARD,
+        sessionId: sessionId(ctx),
       });
       if (!result) {
         clearFailure("tool guard", ctx, startedAt);
@@ -224,6 +271,42 @@ export default function backlogMdExtension(
       clearFailure("tool guard", ctx, startedAt);
     } catch (error) {
       report("tool guard", error, ctx, startedAt);
+    }
+  });
+
+  pi.on("turn_end", async (_event, ctx) => {
+    const startedAt = attemptStartedAt();
+    const id = sessionId(ctx);
+    try {
+      if (acceptanceChecksBySession.delete(id)) {
+        clearFailure("acceptance steering", ctx, startedAt);
+        return;
+      }
+      const active = await resolveActiveTask({ cwd: ctx.cwd });
+      if (!("task" in active) || !active.task.acceptanceCriteria?.some((criterion) => !criterion.checked)) {
+        clearFailure("acceptance steering", ctx, startedAt);
+        return;
+      }
+      const steered = steeredTasksBySession.get(id) ?? new Set();
+      if (steered.has(active.task.id)) {
+        clearFailure("acceptance steering", ctx, startedAt);
+        return;
+      }
+      steered.add(active.task.id);
+      steeredTasksBySession.set(id, steered);
+      recordSessionMetric({ cwd: ctx.cwd, sessionId: id, name: "steering" });
+      pi.sendMessage(
+        contextMessage(
+          "backlog-md.acceptance-steering",
+          notice(
+            `Task ${active.task.id} has unchecked acceptance criteria. Name evidence and run backlog_check_ac for each open criterion before finishing it.`,
+          ),
+        ),
+        { deliverAs: "steer" },
+      );
+      clearFailure("acceptance steering", ctx, startedAt);
+    } catch (error) {
+      report("acceptance steering", error, ctx, startedAt);
     }
   });
 
@@ -275,13 +358,22 @@ export default function backlogMdExtension(
 
   pi.on("session_shutdown", async (_event, ctx) => {
     const startedAt = attemptStartedAt();
-    await flushSession({
-      cwd: ctx.cwd,
-      sessionId: sessionId(ctx),
-      pluginRoot,
-      onError: (error) => report("session flush worker", error, ctx, startedAt),
-      onSpawn: () => clearFailure("session flush worker", ctx, startedAt),
-    });
+    const id = sessionId(ctx);
+    try {
+      const active = await resolveActiveTask({ cwd: ctx.cwd });
+      if ("task" in active) {
+        recordSessionMetric({ cwd: ctx.cwd, sessionId: id, name: "unfinished-session" });
+      }
+      await flushSession({
+        cwd: ctx.cwd,
+        sessionId: id,
+        pluginRoot,
+        onError: (error) => report("session flush worker", error, ctx, startedAt),
+        onSpawn: () => clearFailure("session flush worker", ctx, startedAt),
+      });
+    } catch (error) {
+      report("session shutdown", error, ctx, startedAt);
+    }
   });
 
   // OMP dispatches extension commands before file commands, so these handlers

@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { run } from "../../lib/proc.mjs";
-import { makeProject, backlogAvailable } from "../helpers/fixture.mjs";
+import { makeProject, backlogAvailable, parseHookOutput } from "../helpers/fixture.mjs";
 import { FRAME_OPEN } from "../../lib/render.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -58,10 +58,34 @@ test("a resolvable task produces the SessionStart envelope with the framed brief
 
     const r = await feed({ session_id: "contract-session-start", cwd: p.root, source: "startup" }, p.root);
     assert.equal(r.code, 0);
-    const parsed = JSON.parse(r.stdout);
+    const parsed = parseHookOutput(r, "SessionStart");
     assert.equal(parsed.hookSpecificOutput.hookEventName, "SessionStart");
     assert.ok(parsed.hookSpecificOutput.additionalContext.includes(FRAME_OPEN));
     assert.ok(parsed.hookSpecificOutput.additionalContext.includes(id));
+  } finally {
+    p.cleanup();
+  }
+});
+
+// The watchdog and the stdin read both exit 0 with no stdout, by design: the
+// host must never be handed a broken payload. A bare `JSON.parse("")` of that
+// silence blames the parser — "Unexpected end of JSON input" — which is the
+// wrong diagnosis for the one situation that produces it under parallel load.
+test("a hook starved of its budget is reported as a budget failure, not a JSON error", async (t) => {
+  if (!available) return t.skip("backlog CLI not installed");
+  const p = await makeProject();
+  try {
+    const id = await p.createTask("Budget check");
+    await p.cli(["task", "edit", id, "-s", "In Progress"]);
+
+    const json = JSON.stringify({ session_id: "contract-budget", cwd: p.root, source: "startup" });
+    const command = `printf '%s' ${shQuote(json)} | BACKLOG_MD_TIMEOUT_SCALE=0.001 ${shQuote(process.execPath)} ${shQuote(HOOK)}`;
+    const r = await run("/bin/sh", ["-c", command], { cwd: p.root, timeoutMs: 10000 });
+
+    assert.equal(r.code, 0);
+    assert.equal(r.stdout.trim(), "");
+    assert.throws(() => parseHookOutput(r, "SessionStart"), /SessionStart produced no stdout/);
+    assert.throws(() => parseHookOutput(r, "SessionStart"), /BACKLOG_MD_TIMEOUT_SCALE/);
   } finally {
     p.cleanup();
   }

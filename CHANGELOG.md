@@ -17,6 +17,11 @@ holds the previous version, they run that one. `/backlog-md:doctor` reports
 what the installed hooks actually resolve to, and `/backlog-md:setup` rewrites
 the record.
 
+When installing in both Claude Code and OMP, keep the marketplace name
+`gardenbaum` in both registries. The plugin ID is `backlog-md@gardenbaum`;
+different marketplace names create separate IDs and leave both installations
+active instead of allowing OMP's replacement rule to apply.
+
 ## 0.3.0 — 2026-08-29
 
 - The same marketplace package now installs natively in OMP through

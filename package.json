@@ -21,7 +21,8 @@
     "coverage": "node --require ./test/helpers/isolate-state.cjs --test --test-concurrency=2 --experimental-test-coverage test/*/*.test.mjs",
     "typecheck": "tsc -p jsconfig.json",
     "lint": "biome check .",
-    "format": "biome check --write ."
+    "format": "biome check --write .",
+    "eval": "node ./eval/run.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",

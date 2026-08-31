@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { readFileSync, writeFileSync, mkdtempSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { makeProject, backlogAvailable } from "../helpers/fixture.mjs";
-import { run } from "../../lib/proc.mjs";
+import { makeProject, backlogAvailable, parseHookOutput } from "../helpers/fixture.mjs";
+import { run, scaledTimeout } from "../../lib/proc.mjs";
 import { writeCache, readCache, appendEvent, deriveSession } from "../../lib/cache.mjs";
 import { FRAME_OPEN, NOTICE_OPEN } from "../../lib/render.mjs";
 
@@ -61,7 +61,7 @@ test("the hook never blocks and never emits a permission decision", async (t) =>
     const r = await feed({ session_id: "s1", cwd: p.root, prompt: "implement the thing" }, p.root);
     assert.equal(r.code, 0);
     if (r.stdout.trim()) {
-      const parsed = JSON.parse(r.stdout);
+      const parsed = parseHookOutput(r, "UserPromptSubmit");
       assert.ok(!("permissionDecision" in parsed.hookSpecificOutput), "UserPromptSubmit must never decide");
       assert.equal(parsed.hookSpecificOutput.hookEventName, "UserPromptSubmit");
     }
@@ -78,7 +78,7 @@ test("a task id in the prompt injects that task's compact brief, once", async (t
     const payload = { session_id: "s2", cwd: p.root, prompt: `have a look at ${id} please` };
 
     const first = await feed(payload, p.root);
-    const parsed = JSON.parse(first.stdout);
+    const parsed = parseHookOutput(first, "UserPromptSubmit");
     assert.equal(parsed.hookSpecificOutput.hookEventName, "UserPromptSubmit");
     assert.ok(parsed.hookSpecificOutput.additionalContext.includes(FRAME_OPEN));
     assert.ok(parsed.hookSpecificOutput.additionalContext.includes(id));
@@ -101,7 +101,7 @@ test("observations appear once the session has edited source", async (t) => {
     seedEdits(p.root, "s3", 4);
 
     const r = await feed({ session_id: "s3", cwd: p.root, prompt: "carry on" }, p.root);
-    const context = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+    const context = parseHookOutput(r, "UserPromptSubmit").hookSpecificOutput.additionalContext;
     assert.match(context, /acceptance criteria 1 (is|are) unchecked/);
     assert.match(context, /file:line/i);
     assert.ok(context.includes(NOTICE_OPEN), "observations are the plugin's own sentences, not contributor prose");
@@ -231,7 +231,7 @@ test("no cached id but a real active task: edits neither mislabel it as foreign 
     seedEdits(p.root, "s9", 2); // no taskId cached at all
 
     const r = await feed({ session_id: "s9", cwd: p.root, prompt: `now implement ${id}` }, p.root);
-    const context = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+    const context = parseHookOutput(r, "UserPromptSubmit").hookSpecificOutput.additionalContext;
     assert.ok(
       !/This is not the active task/.test(context),
       "the task the cascade actually finds active must not be presented as foreign",
@@ -264,7 +264,7 @@ test("a stale journal identity naming a different task than the fresher cached s
     seedEdits(p.root, "s11", 3); // no `stale` event: the trust-cached branch is taken
 
     const r = await feed({ session_id: "s11", cwd: p.root, prompt: `now review ${id}` }, p.root);
-    const context = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+    const context = parseHookOutput(r, "UserPromptSubmit").hookSpecificOutput.additionalContext;
     assert.ok(
       !/This is not the active task/.test(context),
       "the task actually fetched for observations must not also be labelled foreign",
@@ -295,9 +295,13 @@ test("a speculative candidate lookup times out far short of the 3s default", asy
     const elapsedMs = Date.now() - startedAt;
 
     assert.equal(r.code, 0);
+    // The bound tracks the same multiplier the budget does, so raising
+    // BACKLOG_MD_TIMEOUT_SCALE for a loaded run does not turn this assertion
+    // into a failure about the knob rather than about the timeout.
+    const budget = scaledTimeout(2500);
     assert.ok(
-      elapsedMs < 2500,
-      `candidate lookup must honour the tightened ~1s timeout, not the 3s default (took ${elapsedMs}ms)`,
+      elapsedMs < budget,
+      `candidate lookup must honour the tightened ~1s timeout, not the 3s default (took ${elapsedMs}ms, budget ${budget}ms)`,
     );
   } finally {
     p.cleanup();
@@ -333,7 +337,7 @@ test("the nudge fires when the CLI positively reports an empty In Progress colum
   try {
     await p.createTask("Waiting in To Do");
     const r = await feed({ session_id: "n1", cwd: p.root, prompt: "implement the parser" }, p.root);
-    const context = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+    const context = parseHookOutput(r, "UserPromptSubmit").hookSpecificOutput.additionalContext;
     assert.match(context, NO_TASK_CLAIM, "nothing is In Progress, so the nudge is the whole point");
   } finally {
     p.cleanup();

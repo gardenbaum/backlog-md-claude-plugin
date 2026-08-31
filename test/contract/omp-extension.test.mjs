@@ -1,16 +1,43 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import backlogMdExtension from "../../omp/index.mjs";
 import { COMMAND_NAMES } from "../../lib/commands.mjs";
-import { deriveSession, readRuntimeFailures } from "../../lib/cache.mjs";
+import { clearJournal, deriveSession, listSessionSummaries, readRuntimeFailures } from "../../lib/cache.mjs";
 import { collectDoctor, formatDoctor } from "../../scripts/backlog-cc.mjs";
 import { backlogAvailable, makeProject } from "../helpers/fixture.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/**
+ * The newest message the extension sent, or a named failure.
+ *
+ * An empty queue means the adapter produced nothing — under a shrunk
+ * `BACKLOG_MD_TIMEOUT_SCALE` or heavy parallel load that is the prompt budget
+ * expiring, and `.at(-1).message` would report it as a property access on
+ * undefined instead.
+ */
+function lastMessage(pi, event) {
+  const sent = pi.messages.at(-1);
+  if (!sent) {
+    throw new Error(
+      `${event}: the extension sent no message — its Backlog.md lookup exceeded the prompt budget. Raise BACKLOG_MD_TIMEOUT_SCALE when running under load.`,
+    );
+  }
+  return sent;
+}
 
 function mockExtensionApi() {
   const events = new Map();
@@ -19,6 +46,9 @@ function mockExtensionApi() {
   const commandRegistrations = [];
   const userMessages = [];
   const warnings = [];
+  const tools = new Map();
+  const activeToolSets = [];
+  let activeTools = [];
   const api = {
     events,
     commands,
@@ -26,11 +56,19 @@ function mockExtensionApi() {
     messages,
     userMessages,
     warnings,
+    tools,
+    activeToolSets,
     logger: { warn: (...args) => warnings.push(args) },
     on: (name, handler) => events.set(name, handler),
     registerCommand: (name, options) => {
       commandRegistrations.push(name);
       commands.set(name, options);
+    },
+    registerTool: (definition) => tools.set(definition.name, definition),
+    getActiveTools: () => activeTools,
+    setActiveTools: async (names) => {
+      activeTools = names;
+      activeToolSets.push(names);
     },
     sendMessage: (message, options) => messages.push({ message, options }),
     sendUserMessage: (message, options) => userMessages.push({ message, options }),
@@ -73,6 +111,7 @@ test("the package adapter registers native OMP lifecycle, prompt, tool, and comm
     "session_tree",
     "tool_call",
     "tool_result",
+    "turn_end",
   ]);
   assert.deepEqual([...pi.commands.keys()].sort(), [
     "backlog-md:decompose",
@@ -85,6 +124,134 @@ test("the package adapter registers native OMP lifecycle, prompt, tool, and comm
     "backlog-md:verify",
   ]);
   assert.equal(pi.commandRegistrations.length, pi.commands.size, "each OMP command is registered exactly once");
+});
+
+test("native Backlog tools are essential, inactive by default, and require acceptance evidence", () => {
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+
+  const names = [
+    "backlog_check_ac",
+    "backlog_next",
+    "backlog_task_create",
+    "backlog_task_finish",
+    "backlog_task_plan",
+    "backlog_task_start",
+  ];
+  assert.deepEqual([...pi.tools.keys()].sort(), names);
+  assert.deepEqual(pi.getActiveTools(), []);
+  for (const name of names) {
+    const tool = pi.tools.get(name);
+    assert.equal(tool.loadMode, "essential");
+    assert.equal(tool.defaultInactive, true);
+  }
+  const check = pi.tools.get("backlog_check_ac");
+  assert.equal(check.approval, "write");
+  assert.deepEqual(check.parameters.required, ["taskId", "index", "evidence"]);
+});
+
+test("native Backlog tools activate only after an OMP session starts in a Backlog project", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+
+  await pi.events.get("session_start")({}, context(project.root, "omp-native-tools"));
+
+  assert.deepEqual(pi.activeToolSets, [[...pi.tools.keys()]]);
+});
+
+test("an unchecked active task gets one end-of-turn steering message", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const id = await project.createTask("Steer me", ["--ac", "Criterion remains open"]);
+  await project.cli(["task", "edit", id, "-s", "In Progress"]);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const turn = { toolResults: [] };
+  const ctx = context(project.root, "omp-steering");
+
+  await pi.events.get("turn_end")(turn, ctx);
+  await pi.events.get("turn_end")(turn, ctx);
+
+  assert.equal(pi.messages.length, 1);
+  assert.match(pi.messages[0].message.content, new RegExp(id));
+  assert.deepEqual(pi.messages[0].options, { deliverAs: "steer" });
+  assert.equal(deriveSession(project.root, "omp-steering").metrics.steeringMessages, 1);
+});
+
+test("native Backlog tools execute lifecycle mutations without a shell command", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-native-lifecycle");
+
+  const create = await pi.tools.get("backlog_task_create").execute(
+    "call-create",
+    {
+      title: "Native tool task",
+      description: "Created without shell quoting.",
+      acceptanceCriteria: ["The native tool records evidence."],
+    },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(create.isError, undefined, create.content[0].text);
+  const id = JSON.parse((await project.cli(["task", "list", "--json"])).stdout).tasks.find(
+    (task) => task.title === "Native tool task",
+  ).id;
+
+  const start = await pi.tools
+    .get("backlog_task_start")
+    .execute("call-start", { taskId: id }, undefined, undefined, ctx);
+  assert.equal(start.isError, undefined, start.content[0].text);
+  const plan = await pi.tools
+    .get("backlog_task_plan")
+    .execute("call-plan", { taskId: id, steps: ["Run the focused contract test."] }, undefined, undefined, ctx);
+  assert.equal(plan.isError, undefined, plan.content[0].text);
+  const checked = await pi.tools
+    .get("backlog_check_ac")
+    .execute("call-check", { taskId: id, index: 1, evidence: "native tool contract test" }, undefined, undefined, ctx);
+  assert.equal(checked.isError, undefined, checked.content[0].text);
+  const finished = await pi.tools
+    .get("backlog_task_finish")
+    .execute("call-finish", { taskId: id, summary: "Completed through native tools." }, undefined, undefined, ctx);
+  assert.equal(finished.isError, undefined, finished.content[0].text);
+
+  const task = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task;
+  assert.equal(task.status, "Done");
+  assert.equal(task.acceptanceCriteria[0].checked, true);
+  assert.match(task.implementationNotes, /native tool contract test/);
+  assert.match(task.implementationPlan, /Run the focused contract test/);
+  assert.match(task.finalSummary, /Completed through native tools/);
+  assert.deepEqual(deriveSession(project.root, "omp-native-lifecycle").metrics, {
+    guards: 0,
+    toolCalls: {
+      backlog_task_create: 1,
+      backlog_task_start: 1,
+      backlog_task_plan: 1,
+      backlog_check_ac: 1,
+      backlog_task_finish: 1,
+    },
+    acceptanceChecks: 1,
+    unplannedStarts: 1,
+    unfinishedSessions: 0,
+    steeringMessages: 0,
+  });
+});
+
+test("every file command has a native OMP registration", () => {
+  const fileCommands = readdirSync(join(root, "commands"), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => entry.name.slice(0, -".md".length))
+    .sort();
+
+  assert.deepEqual([...COMMAND_NAMES].sort(), fileCommands);
 });
 
 test("OMP commands render the installed root and arguments without ambient Claude variables", async () => {
@@ -283,7 +450,7 @@ test("OMP blocks direct Backlog edits, warns in guard-off mode, and records sour
 
   const blocked = pi.events.get("tool_call")({ toolName: "edit", input: editInput }, ctx);
   assert.equal(blocked.block, true);
-  assert.match(blocked.reason, /BACK-12[\s\S]*backlog task edit --help/);
+  assert.match(blocked.reason, /BACK-12[\s\S]*backlog task edit BACK-12 --help/);
 
   const mountedAst = {
     path: "xd://ast_edit",
@@ -305,11 +472,11 @@ test("OMP blocks direct Backlog edits, warns in guard-off mode, and records sour
   try {
     const warned = pi.events.get("tool_call")({ toolName: "edit", input: editInput }, ctx);
     assert.equal(warned, undefined);
-    assert.match(pi.messages.at(-1).message.content, /Warning, not blocked/);
-    assert.deepEqual(pi.messages.at(-1).options, { deliverAs: "nextTurn" });
+    assert.match(lastMessage(pi, "message").message.content, /Warning, not blocked/);
+    assert.deepEqual(lastMessage(pi, "message").options, { deliverAs: "nextTurn" });
     const mountedWarning = pi.events.get("tool_call")({ toolName: "write", input: mountedLsp }, ctx);
     assert.equal(mountedWarning, undefined);
-    assert.match(pi.messages.at(-1).message.content, /Warning, not blocked/);
+    assert.match(lastMessage(pi, "message").message.content, /Warning, not blocked/);
   } finally {
     if (previousGuard === undefined) delete process.env.BACKLOG_MD_GUARD;
     else process.env.BACKLOG_MD_GUARD = previousGuard;
@@ -327,6 +494,7 @@ test("OMP blocks direct Backlog edits, warns in guard-off mode, and records sour
   const derived = deriveSession(project.root, "omp-tools");
   assert.equal(derived.sourceEdits, 1);
   assert.deepEqual(derived.pendingModifiedFiles, ["src/a.mjs"]);
+  assert.equal(derived.metrics.guards, 5);
 
   const preview = {
     toolName: "ast_edit",
@@ -380,6 +548,23 @@ test("OMP blocks direct Backlog edits, warns in guard-off mode, and records sour
   assert.deepEqual(resolved.pendingModifiedFiles.sort(), ["src/a.mjs", "src/staged.mjs"]);
 });
 
+test("OMP blocks unsafe quoting in direct Backlog shell commands", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+
+  const blocked = pi.events.get("tool_call")(
+    { toolName: "bash", input: { command: "backlog task edit BCC-9 --append-plan $'one\\ntwo'" } },
+    context(project.root, "omp-quoting"),
+  );
+
+  assert.equal(blocked.block, true);
+  assert.match(blocked.reason, /unsafe shell quoting/i);
+  assert.match(blocked.reason, /backlog task edit BCC-9 --append-plan 'one\ntwo'/);
+});
+
 test("OMP injects active-task and prompt observations through native events", async (t) => {
   if (!(await backlogAvailable())) return t.skip("backlog not installed");
   const project = await makeProject();
@@ -394,15 +579,19 @@ test("OMP injects active-task and prompt observations through native events", as
   backlogMdExtension(pi);
   const ctx = context(project.root, "omp-context");
   await pi.events.get("session_start")({}, ctx);
-  assert.match(pi.messages.at(-1).message.content, new RegExp(active));
-  assert.deepEqual(pi.messages.at(-1).options, { deliverAs: "nextTurn" });
+  assert.match(lastMessage(pi, "message").message.content, new RegExp(active));
+  assert.deepEqual(lastMessage(pi, "message").options, { deliverAs: "nextTurn" });
 
   await pi.events.get("session_compact")({}, ctx);
-  assert.match(pi.messages.at(-1).message.content, new RegExp(active));
-  assert.deepEqual(pi.messages.at(-1).options, { deliverAs: "nextTurn" });
+  assert.match(lastMessage(pi, "message").message.content, new RegExp(active));
+  assert.deepEqual(lastMessage(pi, "message").options, { deliverAs: "nextTurn" });
 
   pi.events.get("input")({ text: `Review ${foreign}`, source: "interactive" }, ctx);
   const observation = await pi.events.get("before_agent_start")({ prompt: `Review ${currentForeign}` }, ctx);
+  assert.ok(
+    observation,
+    "before_agent_start returned nothing — the prompt observation exceeded its budget. Raise BACKLOG_MD_TIMEOUT_SCALE when running under load.",
+  );
   assert.match(observation.message.content, new RegExp(currentForeign));
   assert.doesNotMatch(observation.message.content, new RegExp(foreign));
   assert.equal(observation.message.display, false);
@@ -505,4 +694,35 @@ test("OMP message failures persist for doctor and clear after a newer success", 
     readRuntimeFailures(project.root).some((failure) => failure.operation === "OMP session_compact"),
     false,
   );
+});
+
+// The counters used to live only in the journal, which the flush worker deletes
+// on every terminal outcome — so a clean session lost them, and
+// `unfinished-session`, recorded one statement before that worker is spawned,
+// was never observable at all.
+test("OMP shutdown freezes the session counters before the worker that deletes them", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const active = await project.createTask("OMP unfinished task");
+  const started = await project.cli(["task", "edit", active, "-s", "In Progress"]);
+  assert.equal(started.ok, true, started.stderr || started.stdout);
+
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const previousNode = process.env.BACKLOG_MD_NODE;
+  process.env.BACKLOG_MD_NODE = join(project.root, "missing-node");
+  try {
+    await pi.events.get("session_shutdown")({}, context(project.root, "omp-summary"));
+  } finally {
+    if (previousNode === undefined) delete process.env.BACKLOG_MD_NODE;
+    else process.env.BACKLOG_MD_NODE = previousNode;
+  }
+
+  clearJournal(project.root, "omp-summary");
+  assert.equal(deriveSession(project.root, "omp-summary").metrics.unfinishedSessions, 0);
+
+  const [summary] = listSessionSummaries(project.root);
+  assert.equal(summary?.sessionId, "omp-summary");
+  assert.equal(summary.metrics.unfinishedSessions, 1);
 });

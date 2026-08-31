@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { run } from "../../lib/proc.mjs";
+import { parseHookOutput } from "../helpers/fixture.mjs";
 
 const HOOK = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "pre-tool-use.mjs");
 
@@ -43,7 +44,7 @@ test("editing a task file is denied, with the replacement command in the reason"
   const root = project();
   const r = await feed(editTask(root), root);
   assert.equal(r.code, 0, "a deny is still a successful hook run");
-  const output = JSON.parse(r.stdout).hookSpecificOutput;
+  const output = parseHookOutput(r, "PreToolUse").hookSpecificOutput;
   assert.equal(output.hookEventName, "PreToolUse");
   assert.equal(output.permissionDecision, "deny");
   assert.match(output.permissionDecisionReason, /--append-notes/);
@@ -66,7 +67,7 @@ test("a NotebookEdit is caught through tool_input.notebook_path, same as tool_in
     root,
   );
   assert.equal(r.code, 0);
-  const output = JSON.parse(r.stdout).hookSpecificOutput;
+  const output = parseHookOutput(r, "PreToolUse").hookSpecificOutput;
   assert.equal(output.permissionDecision, "deny");
   assert.match(output.permissionDecisionReason, /BACK-12/);
 });
@@ -85,7 +86,7 @@ test("BACKLOG_MD_GUARD=0 turns the deny into a warning", async () => {
   const root = project();
   const r = await feed(editTask(root), root, "BACKLOG_MD_GUARD=0");
   assert.equal(r.code, 0);
-  const output = JSON.parse(r.stdout).hookSpecificOutput;
+  const output = parseHookOutput(r, "PreToolUse").hookSpecificOutput;
   assert.ok(!("permissionDecision" in output), "the switch means no decision, not a permissive one");
   assert.match(output.additionalContext, /--append-notes/);
 });

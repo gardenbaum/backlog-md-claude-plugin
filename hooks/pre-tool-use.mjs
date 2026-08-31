@@ -16,6 +16,7 @@ guard(
       toolName: input.tool_name,
       toolInput: input.tool_input,
       guard: process.env.BACKLOG_MD_GUARD,
+      sessionId: input.session_id,
     });
     if (!result) return;
 

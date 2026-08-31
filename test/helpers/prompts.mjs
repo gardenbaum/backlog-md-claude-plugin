@@ -23,6 +23,7 @@ export function promptFiles() {
   walk("skills");
   walk("agents");
   walk("commands");
+  walk("rules");
   return out.sort();
 }
 

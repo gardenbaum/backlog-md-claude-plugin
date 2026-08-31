@@ -121,6 +121,27 @@ test("guard force-exits a hanging main", async () => {
   assert.ok(elapsed < 2000, `expected the watchdog to end this, not our 4s timeout (${elapsed}ms)`);
 });
 
+test("guard records a watchdog timeout even though the hook protocol is silent", async () => {
+  const state = mkdtempSync(join(tmpdir(), "bcc-watchdog-"));
+  const probe = scriptRunner(`
+    import { guard } from __LIB__;
+    setInterval(() => {}, 3_600_000);
+    guard(async () => { await new Promise(() => {}); }, { hardTimeoutMs: 100, event: "SessionStart" });
+  `);
+  const r = await run(process.execPath, [probe], {
+    timeoutMs: 4000,
+    env: { ...process.env, BACKLOG_MD_DEBUG: "1", XDG_STATE_HOME: state },
+  });
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, "", "a timed-out hook cannot safely emit a partial protocol envelope");
+
+  const entry = JSON.parse(readFileSync(join(state, "backlog-md-cc", "debug.jsonl"), "utf8").trim());
+  assert.equal(entry.ok, false);
+  assert.equal(entry.watchdog, true);
+  assert.equal(entry.event, "SessionStart");
+  assert.match(entry.message, /watchdog timeout/i);
+});
+
 // BACKLOG_MD_DEBUG is the second knob (BCC-6). guard() swallows every error by
 // design, so without this there is no way to see the exception at all.
 test("with BACKLOG_MD_DEBUG set, the swallowed error reaches the debug log", async () => {

@@ -8,12 +8,28 @@ test("the skill exists where a plugin's skills are discovered", () => {
   assert.ok(promptFiles().includes(join("skills", "backlog-workflow", "SKILL.md")));
 });
 
+test("the workflow skill is hidden from OMP discovery but remains installed", () => {
+  const { fields } = frontmatter(read(join("skills", "backlog-workflow", "SKILL.md")));
+  assert.equal(fields.hide, "true");
+});
+
 test("every prompt file has frontmatter with a description", () => {
   for (const rel of promptFiles()) {
     const { fields } = frontmatter(read(rel));
     assert.ok(fields, `${rel}: no frontmatter`);
     assert.ok(fields.description, `${rel}: no description`);
   }
+});
+
+test("OMP rules separate always-applied task ownership from CLI quoting guidance", () => {
+  const contract = frontmatter(read(join("rules", "backlog-md-contract.md")));
+  assert.equal(contract.fields.alwaysApply, "true");
+  assert.match(contract.body, /backlog_next/);
+  assert.match(contract.body, /backlog_check_ac.*evidence/i);
+
+  const quoting = frontmatter(read(join("rules", "backlog-md-quoting.md")));
+  assert.match(quoting.fields.condition, /backlog task \(edit\|create\).*--append-/);
+  for (const rule of QUOTING_RULES) assert.ok(quoting.body.includes(rule), `missing rule: ${rule}`);
 });
 
 // Verbatim, not paraphrased. A paraphrase is how the three hazards turn into

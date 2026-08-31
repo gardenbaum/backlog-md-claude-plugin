@@ -42,9 +42,10 @@ test("notes, plan, status and definition of done each get their own command", ()
   }
 });
 
-test("an unrecognisable edit falls back to the generic pointer", () => {
+test("an unrecognisable task edit supplies an executable command with its task id", () => {
   const reason = denyReason(task, { new_string: "just some prose" });
-  assert.match(reason, /backlog task edit --help/);
+  assert.ok(commandLines(reason).includes("backlog task edit BACK-12 --help"));
+  assertPasteable(reason);
 });
 
 test("a managed file with no parsable id never emits a command with a made-up id", () => {

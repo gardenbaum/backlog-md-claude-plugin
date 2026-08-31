@@ -3,12 +3,19 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { run, workerNodeExecutable } from "../../lib/proc.mjs";
+import { run, scaledTimeout, workerNodeExecutable } from "../../lib/proc.mjs";
 
 test("worker Node honors a non-empty BACKLOG_MD_NODE override", () => {
   assert.equal(workerNodeExecutable({ BACKLOG_MD_NODE: " /opt/node/bin/node " }), "/opt/node/bin/node");
   assert.equal(workerNodeExecutable({ BACKLOG_MD_NODE: " " }), "node");
   assert.equal(workerNodeExecutable({}, process.execPath), process.execPath);
+});
+
+test("timeout scale multiplies only valid positive environment values", () => {
+  assert.equal(scaledTimeout(5000, {}), 5000);
+  assert.equal(scaledTimeout(5000, { BACKLOG_MD_TIMEOUT_SCALE: "2.5" }), 12500);
+  assert.equal(scaledTimeout(5000, { BACKLOG_MD_TIMEOUT_SCALE: "0" }), 5000);
+  assert.equal(scaledTimeout(5000, { BACKLOG_MD_TIMEOUT_SCALE: "not-a-number" }), 5000);
 });
 
 test("run returns ok with stdout on success", async () => {

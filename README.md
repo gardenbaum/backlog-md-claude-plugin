@@ -38,6 +38,11 @@ Add this repository as a plugin marketplace, then install from it:
 /plugin install backlog-md@gardenbaum
 ```
 
+Use the marketplace name `gardenbaum` in both hosts. Plugin identity is
+`backlog-md@gardenbaum`; if Claude Code and OMP use different marketplace names,
+OMP sees different plugin IDs and activates both installations instead of
+replacing Claude's matching entry.
+
 ### OMP
 
 Add the same marketplace and install the same package:
@@ -284,6 +289,12 @@ reads.
   not its files: the sweep writes the list onto the task before removing the
   journal. Thirty minutes is a guess at liveness; nothing in the state
   directory says whether a session is still running.
+- The behavior counters `backlog-cc doctor` reports are derived from the same
+  journal the flush removes, so a session that ends cleanly is frozen into a
+  small `<session>.metrics` file beside it, written at shutdown before the
+  flush worker is spawned. Only the newest twenty are kept, and a session that
+  is killed outright never writes one: its counters go with its journal at the
+  next sweep.
 - Claude Code injects nothing *before* a compaction, only after it. The plugin
   used to register a `PreCompact` hook for that, and Claude Code 2.1.238
   rejects its output: `hookSpecificOutput` has no `PreCompact` variant, so the
@@ -313,6 +324,35 @@ npm run typecheck      # tsc --noEmit over the JSDoc types
 npm run lint           # biome check (formatting and lint in one pass)
 npm run format         # biome check --write, applies the safe fixes
 ```
+```bash
+npm run eval -- --model-a minimax-code/MiniMax-M2 --model-b <other-model>
+```
+
+The runner gives each invocation an isolated OMP state directory. For
+`minimax-code/*`, it writes that directory's `models.yml` with
+`requiresThinkingAsText: true`: OMP 18.0.11 otherwise drops MiniMax reasoning
+before the tool-result request. The provider receives the preserved reasoning
+as MiniMax `<thinking>` assistant history; no provider setting or credential is
+changed outside that temporary directory.
+
+That isolation cuts both ways. OMP keeps credentials in `<agent dir>/agent.db`
+(table `auth_credentials`), so a run pointed at a temporary agent directory
+starts with an empty credential store and cannot use an `/login` session from
+`~/.omp`. Real evaluation runs therefore need the provider API key in the
+environment — the runner passes the ambient environment through to OMP —
+for example `MINIMAX_API_KEY=… npm run eval -- …`.
+
+The runner also refuses to start when `OMP_PROFILE` or `PI_PROFILE` is set:
+OMP ignores `PI_CODING_AGENT_DIR` under a profile and would read the profile's
+`models.yml`, silently dropping the MiniMax compatibility override.
+
+OMP discovers commands, skills, rules, agents and MCP servers from a
+`--plugin-dir` root, but none of its plugin providers register the
+extension-module capability, so `omp/index.mjs` is not loaded from an injected
+root. The runner adds `--no-extensions -e <root>/omp/index.mjs` to measure the
+work tree's extension rather than an installed copy. A run that records no
+session state is reported with `ok: false` and `metrics: null` instead of zeros.
+
 
 Comments in this repository carry the reasoning, not just the what: a comment
 saying *why* a line is the way it is, and what was measured to get there,

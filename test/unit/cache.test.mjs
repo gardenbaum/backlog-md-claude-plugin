@@ -10,10 +10,14 @@ import {
   writeCache,
   updateCache,
   clearCache,
+  clearJournal,
   journalPath,
   appendEvent,
   readJournal,
   deriveSession,
+  listSessions,
+  listSessionSummaries,
+  writeSessionSummary,
   stateBase,
   runtimeHealthPath,
   readRuntimeFailures,
@@ -194,6 +198,26 @@ test("deriveSession counts edits and lists pending paths in first-seen order, de
   assert.deepEqual(derived.pendingModifiedFiles, ["src/a.ts", "src/b.ts"]);
 });
 
+test("deriveSession aggregates Backlog behavior counters", () => {
+  const root = repo();
+  appendEvent(root, "s", { t: "metric", name: "guard" });
+  appendEvent(root, "s", { t: "metric", name: "tool", tool: "backlog_task_plan" });
+  appendEvent(root, "s", { t: "metric", name: "tool", tool: "backlog_task_plan" });
+  appendEvent(root, "s", { t: "metric", name: "acceptance-check" });
+  appendEvent(root, "s", { t: "metric", name: "unplanned-start" });
+  appendEvent(root, "s", { t: "metric", name: "unfinished-session" });
+  appendEvent(root, "s", { t: "metric", name: "steering" });
+
+  assert.deepEqual(deriveSession(root, "s").metrics, {
+    guards: 1,
+    toolCalls: { backlog_task_plan: 2 },
+    acceptanceChecks: 1,
+    unplannedStarts: 1,
+    unfinishedSessions: 1,
+    steeringMessages: 1,
+  });
+});
+
 test("deriveSession with no journal at all reports the empty baseline", () => {
   const derived = deriveSession(repo(), "never-appended");
   assert.deepEqual(derived, {
@@ -202,6 +226,14 @@ test("deriveSession with no journal at all reports the empty baseline", () => {
     editsAtLastNotes: 0,
     stale: false,
     taskId: null,
+    metrics: {
+      guards: 0,
+      toolCalls: {},
+      acceptanceChecks: 0,
+      unplannedStarts: 0,
+      unfinishedSessions: 0,
+      steeringMessages: 0,
+    },
   });
 });
 
@@ -307,4 +339,35 @@ test("the state directory is created private to the user", { skip: process.platf
   const root = repo();
   writeCache(root, "sess-mode", { a: 1 });
   assert.equal(statSync(cacheDir(root)).mode & 0o777, 0o700);
+});
+
+test("a session summary outlives the journal it was derived from", () => {
+  const root = repo();
+  appendEvent(root, "ended", { t: "metric", name: "guard" });
+  appendEvent(root, "ended", { t: "metric", name: "tool", tool: "backlog_next" });
+  writeSessionSummary(root, "ended");
+  clearJournal(root, "ended");
+
+  assert.deepEqual(deriveSession(root, "ended").metrics.toolCalls, {});
+  const [summary] = listSessionSummaries(root);
+  assert.equal(summary.sessionId, "ended");
+  assert.equal(summary.metrics.guards, 1);
+  assert.deepEqual(summary.metrics.toolCalls, { backlog_next: 1 });
+});
+
+// A summary the sweep could see would be swept forever: it holds no pending
+// files, so every session start would "collect" it and find it again next time.
+test("summaries are invisible to the session listing the sweep walks", () => {
+  const root = repo();
+  writeSessionSummary(root, "ended");
+  assert.deepEqual(listSessions(root), []);
+});
+
+test("stored summaries stay bounded as sessions accumulate", () => {
+  const root = repo();
+  for (let i = 0; i < 25; i += 1) writeSessionSummary(root, `s-${i}`, 1000 + i);
+  const stored = listSessionSummaries(root);
+  assert.equal(stored.length, 20);
+  assert.equal(stored[0].sessionId, "s-24");
+  assert.equal(stored.at(-1).sessionId, "s-5");
 });

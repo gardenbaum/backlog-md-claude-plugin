@@ -4,8 +4,17 @@ import { resolveActiveTask, describeActiveTask, IN_PROGRESS } from "../lib/activ
 import { taskView, configList, configValue } from "../lib/backlog.mjs";
 import { findNext } from "../lib/next.mjs";
 import { renderBrief, renderNext } from "../lib/render.mjs";
-import { readCache, cachePath, debugLog, debugPath, readRuntimeFailures } from "../lib/cache.mjs";
-import { resolvePluginRoot } from "../lib/plugin-root.mjs";
+import {
+  cachePath,
+  debugLog,
+  debugPath,
+  deriveSession,
+  listSessions,
+  listSessionSummaries,
+  readCache,
+  readRuntimeFailures,
+} from "../lib/cache.mjs";
+import { activeBacklogInstallations, resolvePluginRoot } from "../lib/plugin-root.mjs";
 import { run, workerNodeExecutable } from "../lib/proc.mjs";
 import { sweepAbandoned, flushSession } from "../lib/session-sweep.mjs";
 import {
@@ -392,7 +401,10 @@ function supportedNodeVersion(version) {
   return Number.isInteger(major) && major >= 18;
 }
 
-export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli" } = {}) {
+/**
+ * @param {{ cwd?: string, sessionId?: string, home?: string }} [options]
+ */
+export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli", home } = {}) {
   const project = findProject(cwd);
   const version = await run("backlog", ["--version"], { timeoutMs: 8000 });
   const workerCommand = workerNodeExecutable();
@@ -422,6 +434,28 @@ export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli" } =
     config: /** @type {Record<string, { value: string | null, reason: string | null }> | null} */ (null),
     guard: { enabled: process.env.BACKLOG_MD_GUARD !== "0" },
     debug: { enabled: Boolean(process.env.BACKLOG_MD_DEBUG) && process.env.BACKLOG_MD_DEBUG !== "0", log: debugPath() },
+    installations:
+      /** @type {{ paths: { installPath: string, versions: string[], sources: string[] }[], duplicate: boolean }} */ ({
+        paths: [],
+        duplicate: false,
+      }),
+    sessionMetrics: /** @type {{ sessionId: string, metrics: any }[]} */ ([]),
+  };
+
+  const installPaths = new Map();
+  for (const installation of activeBacklogInstallations({ cwd, home })) {
+    const known = installPaths.get(installation.installPath) ?? {
+      installPath: installation.installPath,
+      versions: [],
+      sources: [],
+    };
+    if (!known.versions.includes(installation.version)) known.versions.push(installation.version);
+    if (!known.sources.includes(installation.source)) known.sources.push(installation.source);
+    installPaths.set(installation.installPath, known);
+  }
+  report.installations = {
+    paths: [...installPaths.values()],
+    duplicate: installPaths.size > 1,
   };
 
   if (!project) return report;
@@ -432,6 +466,18 @@ export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli" } =
   report.hooks.runs = snapshot?.hookRuns || {};
   report.hooks.everRan = Object.keys(report.hooks.runs).length > 0;
   report.ompFailures = readRuntimeFailures(project.root);
+  // Still-open sessions are read from their journals, finished ones from the
+  // summary their shutdown froze — without both, the report shows counters
+  // only for sessions that never cleaned up after themselves.
+  const live = listSessions(project.root).map(({ sessionId: id }) => ({
+    sessionId: id,
+    metrics: deriveSession(project.root, id).metrics,
+  }));
+  const open = new Set(live.map((session) => session.sessionId));
+  const ended = listSessionSummaries(project.root)
+    .filter((session) => !open.has(session.sessionId))
+    .map(({ sessionId: id, metrics }) => ({ sessionId: id, metrics }));
+  report.sessionMetrics = [...live, ...ended].slice(0, 5);
 
   report.git = await gitHookState({
     repoRoot: project.root,
@@ -536,6 +582,22 @@ export function formatDoctor(r) {
       : `${mark(false)} no Backlog.md project found from here — run 'backlog init' first`,
   );
 
+  const installs = r.installations?.paths ?? [];
+  if (r.installations?.duplicate) {
+    lines.push(
+      `${mark(false)} Backlog.md is active from ${installs.length} distinct plugin paths — use the same marketplace name in Claude Code and OMP so OMP can replace Claude's matching plugin id`,
+    );
+    for (const install of installs) {
+      lines.push(
+        `${mark(false)} ${install.sources.join(", ")}: ${install.installPath} (version ${install.versions.join(", ")})`,
+      );
+    }
+  } else if (installs.length === 1) {
+    const install = installs[0];
+    lines.push(
+      `${mark(true)} Backlog.md plugin ${install.installPath} (version ${install.versions.join(", ")}) via ${install.sources.join(", ")}`,
+    );
+  }
   if (r.statuses) {
     lines.push(
       r.statuses.error
@@ -563,6 +625,24 @@ export function formatDoctor(r) {
     const operation = String(failure.operation).replace(/^OMP\s+/, "");
     const scope = failure.scope ? ` [session ${failure.scope}]` : "";
     lines.push(`${mark(false)} OMP ${operation}${scope} failed at ${failure.at}: ${failure.message}`);
+  }
+
+  if (r.project.found) {
+    const sessions = r.sessionMetrics ?? [];
+    const label = sessions.length === 1 ? "session" : "sessions";
+    lines.push(`${mark(true)} recent behavior counters (last ${sessions.length} ${label}):`);
+    for (const { sessionId, metrics } of sessions) {
+      const toolCalls = Object.entries(metrics.toolCalls)
+        .map(([name, count]) => `${name} ×${count}`)
+        .join(", ");
+      lines.push(
+        `  ${sessionId}: guards ${metrics.guards}; tool calls ${toolCalls || "none"}; acceptance checks ${
+          metrics.acceptanceChecks
+        }; unplanned starts ${metrics.unplannedStarts}; unfinished sessions ${metrics.unfinishedSessions}; steering messages ${
+          metrics.steeringMessages
+        }`,
+      );
+    }
   }
 
   if (r.config) lines.push(...configLines(r.config));
