@@ -22,6 +22,28 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.1 — 2026-08-31
+
+- Native OMP interface hardened: full `/backlog-md:*` command parity, a
+  duplicate-install check in Doctor, always-applied and conditional rules, the
+  hidden workflow skill, six native `backlog_*` tools, executable deny
+  corrections, and a direct-shell quoting guard.
+- Session counters survive the journal that produced them. `spawnFlush` freezes
+  them into a bounded `<session>.metrics` file before the detached worker
+  removes the journal, and `sweepAbandoned` does the same for a session that was
+  killed before it could shut down — stamped with its last heartbeat, so its
+  numbers arrive one session later instead of being lost. Doctor merges live
+  journals and stored summaries; the newest twenty are kept.
+- The summary write reports on its own `onSummary` channel instead of sharing
+  `onError` with the flush worker, where a later spawn would clear it.
+  `writeAtomic` now removes its staging file when the rename fails.
+- Project-scope OMP installs are resolved and reported: the
+  `<project>/.omp/plugins/node_modules/backlog-md` symlink wins over a
+  user-scope install, matching OMP's own shadowing, and Doctor names the repair
+  for a registry entry whose cache directory an uninstall removed.
+- Added `npm run eval`: five fixed comparative scenarios, plus
+  `BACKLOG_MD_TIMEOUT_SCALE` for the protocol and prompt budgets.
+
 ## 0.3.0 — 2026-08-29
 
 - The same marketplace package now installs natively in OMP through
@@ -75,4 +97,4 @@ Also removed: the statusline snippet, and the command that
 generated it. Anyone who copied it into their Claude Code settings should
 delete that line; nothing regenerates it. Both removals break earlier
 development installs, which is why this section is 0.2.0 rather than 0.1.0.
-Work after it continues at 0.3.1.
+Work after it continues at 0.3.0.
