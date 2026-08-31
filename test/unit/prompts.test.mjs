@@ -26,10 +26,23 @@ test("OMP rules separate always-applied task ownership from CLI quoting guidance
   assert.equal(contract.fields.alwaysApply, "true");
   assert.match(contract.body, /backlog_next/);
   assert.match(contract.body, /backlog_check_ac.*evidence/i);
+  // The three ways a session leaves the workflow before it starts: no task
+  // exists yet, Backlog.md's own CLI instructions outweigh this rule, or the
+  // host's todo list stands in for the task (BCC-3).
+  assert.match(contract.body, /backlog_task_create/);
+  assert.match(contract.body, /supersede the Backlog\.md CLI instructions/);
+  assert.match(contract.body, /todo list.*does not replace the task/is);
 
   const quoting = frontmatter(read(join("rules", "backlog-md-quoting.md")));
   assert.match(quoting.fields.condition, /backlog task \(edit\|create\).*--append-/);
   for (const rule of QUOTING_RULES) assert.ok(quoting.body.includes(rule), `missing rule: ${rule}`);
+});
+
+// alwaysApply carries this file into every prompt of every project, including
+// the ones that have no Backlog.md at all, so its size is a running cost.
+test("the always-applied contract rule stays under 1000 bytes", () => {
+  const bytes = Buffer.byteLength(read(join("rules", "backlog-md-contract.md")), "utf8");
+  assert.ok(bytes < 1000, `contract rule is ${bytes} bytes`);
 });
 
 // Verbatim, not paraphrased. A paraphrase is how the three hazards turn into

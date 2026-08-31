@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mutatesBacklog, writesTaskNotes } from "../../lib/bash.mjs";
+import { initialisesBacklog, mutatesBacklog, writesTaskNotes } from "../../lib/bash.mjs";
 
 test("mutatesBacklog recognises the mutating subcommands", () => {
   for (const cmd of [
@@ -55,9 +55,36 @@ test("writesTaskNotes recognises both notes flags and nothing else", () => {
   assert.equal(writesTaskNotes("backlog task edit 1 --check-ac 2"), false);
 });
 
-test("both predicates tolerate empty and non-string input", () => {
+test("initialisesBacklog recognises the invocation, at the start and inside a chain", () => {
+  for (const cmd of [
+    "backlog init",
+    "backlog init --defaults",
+    "backlog.md init",
+    "cd sub && backlog init",
+    "git init; backlog init",
+  ]) {
+    assert.equal(initialisesBacklog(cmd), true, cmd);
+  }
+});
+
+// The refusal costs a whole call, so a command that only mentions the words
+// must not trigger it — task titles about `backlog init` are the likely case.
+test("initialisesBacklog ignores commands that only name it", () => {
+  for (const cmd of [
+    "echo backlog init",
+    "backlog task create 'backlog init overwrote the config'",
+    "backlog initialise everything",
+    "backlog task list",
+    "git init",
+  ]) {
+    assert.equal(initialisesBacklog(cmd), false, cmd);
+  }
+});
+
+test("all three predicates tolerate empty and non-string input", () => {
   for (const value of ["", null, undefined, 42]) {
     assert.equal(mutatesBacklog(value), false);
     assert.equal(writesTaskNotes(value), false);
+    assert.equal(initialisesBacklog(value), false);
   }
 });

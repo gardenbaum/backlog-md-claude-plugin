@@ -207,6 +207,7 @@ test("deriveSession aggregates Backlog behavior counters", () => {
   appendEvent(root, "s", { t: "metric", name: "unplanned-start" });
   appendEvent(root, "s", { t: "metric", name: "unfinished-session" });
   appendEvent(root, "s", { t: "metric", name: "steering" });
+  appendEvent(root, "s", { t: "metric", name: "taskless-continue" });
 
   assert.deepEqual(deriveSession(root, "s").metrics, {
     guards: 1,
@@ -215,6 +216,7 @@ test("deriveSession aggregates Backlog behavior counters", () => {
     unplannedStarts: 1,
     unfinishedSessions: 1,
     steeringMessages: 1,
+    tasklessContinues: 1,
   });
 });
 
@@ -233,6 +235,7 @@ test("deriveSession with no journal at all reports the empty baseline", () => {
       unplannedStarts: 0,
       unfinishedSessions: 0,
       steeringMessages: 0,
+      tasklessContinues: 0,
     },
   });
 });
@@ -353,6 +356,28 @@ test("a session summary outlives the journal it was derived from", () => {
   assert.equal(summary.sessionId, "ended");
   assert.equal(summary.metrics.guards, 1);
   assert.deepEqual(summary.metrics.toolCalls, { backlog_next: 1 });
+});
+
+// The sweep freezes a long-idle session's counters and deletes its journal.
+// If that session then ends properly, there is nothing left to derive, and an
+// all-zero summary would claim the model never touched the tools (BCC-5).
+test("counters already frozen survive a later summary derived from an emptied journal", () => {
+  const root = repo();
+  appendEvent(root, "swept", { t: "metric", name: "guard" });
+  writeSessionSummary(root, "swept");
+  clearJournal(root, "swept");
+
+  const kept = writeSessionSummary(root, "swept");
+  assert.equal(kept.guards, 1);
+  assert.equal(listSessionSummaries(root)[0].metrics.guards, 1);
+});
+
+test("a session that really did nothing still gets its empty summary", () => {
+  const root = repo();
+  writeSessionSummary(root, "quiet");
+  const [summary] = listSessionSummaries(root);
+  assert.equal(summary.sessionId, "quiet");
+  assert.equal(summary.metrics.guards, 0);
 });
 
 // A summary the sweep could see would be swept forever: it holds no pending

@@ -402,9 +402,15 @@ function supportedNodeVersion(version) {
 }
 
 /**
+ * `sessionId` is the host's own session identity, and its absence is a
+ * finding: only Claude Code names a session in the environment, so a report
+ * without one is running under a host whose hooks do not exist — under OMP the
+ * extension replaces them. A placeholder id here would read the cache of a
+ * session nobody writes and fail every hook check by construction (BCC-2).
+ *
  * @param {{ cwd?: string, sessionId?: string, home?: string }} [options]
  */
-export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli", home } = {}) {
+export async function collectDoctor({ cwd = process.cwd(), sessionId, home } = {}) {
   const project = findProject(cwd);
   const version = await run("backlog", ["--version"], { timeoutMs: 8000 });
   const workerCommand = workerNodeExecutable();
@@ -429,7 +435,8 @@ export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli", ho
     active: /** @type {ReturnType<typeof describeActiveTask> | null} */ (null),
     git: /** @type {any} */ (null),
     cache: { path: /** @type {string | null} */ (null), snapshot: /** @type {any} */ (null) },
-    hooks: { runs: {}, everRan: false },
+    hooks: { host: sessionId ? "claude-code" : "extension", runs: {}, everRan: false },
+    extension: /** @type {{ active: boolean, ageMs: number | null }} */ ({ active: false, ageMs: null }),
     ompFailures: [],
     config: /** @type {Record<string, { value: string | null, reason: string | null }> | null} */ (null),
     guard: { enabled: process.env.BACKLOG_MD_GUARD !== "0" },
@@ -464,11 +471,13 @@ export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli", ho
 
   if (!project) return report;
 
-  report.cache.path = cachePath(project.root, sessionId);
-  const snapshot = readCache(project.root, sessionId);
-  report.cache.snapshot = snapshot;
-  report.hooks.runs = snapshot?.hookRuns || {};
-  report.hooks.everRan = Object.keys(report.hooks.runs).length > 0;
+  if (sessionId) {
+    report.cache.path = cachePath(project.root, sessionId);
+    const snapshot = readCache(project.root, sessionId);
+    report.cache.snapshot = snapshot;
+    report.hooks.runs = snapshot?.hookRuns || {};
+    report.hooks.everRan = Object.keys(report.hooks.runs).length > 0;
+  }
   report.ompFailures = readRuntimeFailures(project.root);
   // Still-open sessions are read from their journals, finished ones from the
   // summary their shutdown froze — without both, the report shows counters
@@ -485,10 +494,12 @@ export async function collectDoctor({ cwd = process.cwd(), sessionId = "cli", ho
   // Merged by time, not by source: a handful of journals left behind by
   // crashed sessions would otherwise fill the report and hide every session
   // that ended properly.
-  report.sessionMetrics = [...live, ...ended]
-    .sort((a, b) => b.at - a.at)
-    .slice(0, 5)
-    .map(({ sessionId: id, metrics }) => ({ sessionId: id, metrics }));
+  const recent = [...live, ...ended].sort((a, b) => b.at - a.at);
+  report.sessionMetrics = recent.slice(0, 5).map(({ sessionId: id, metrics }) => ({ sessionId: id, metrics }));
+  // The stand-in for the hook check on a host that has no hooks: session state
+  // exists only because the extension wrote it.
+  const newest = recent[0]?.at ?? 0;
+  report.extension = { active: newest > 0, ageMs: newest > 0 ? Math.max(0, Date.now() - newest) : null };
 
   report.git = await gitHookState({
     repoRoot: project.root,
@@ -563,6 +574,14 @@ function configLines(config) {
   );
 
   return lines;
+}
+
+/** Coarse age for one report line: seconds, then minutes, then hours. */
+function age(ms) {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 90) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  return minutes < 90 ? `${minutes}m` : `${Math.round(minutes / 60)}h`;
 }
 
 export function formatDoctor(r) {
@@ -653,7 +672,7 @@ export function formatDoctor(r) {
           metrics.acceptanceChecks
         }; unplanned starts ${metrics.unplannedStarts}; unfinished sessions ${metrics.unfinishedSessions}; steering messages ${
           metrics.steeringMessages
-        }`,
+        }; taskless continuations ${metrics.tasklessContinues ?? 0}`,
       );
     }
   }
@@ -688,15 +707,25 @@ export function formatDoctor(r) {
 
   // Hook executions are separate processes. Their cache record proves they
   // ran; its absence does not identify a cause, so keep it distinct from the
-  // worker-node probe above.
+  // worker-node probe above. Only Claude Code runs them at all: elsewhere the
+  // in-process extension is what has to have run, and session state is the
+  // proof of that (BCC-2).
   if (r.project.found) {
-    lines.push(
-      r.hooks.everRan
-        ? `${mark(true)} hooks have run: ${Object.entries(r.hooks.runs)
-            .map(([k, v]) => `${k} at ${v}`)
-            .join(", ")}`
-        : `${mark(false)} no hook has recorded a run for this session — after a fresh session, inspect host hook configuration and the worker-node result above`,
-    );
+    if (r.hooks.host === "extension") {
+      lines.push(
+        r.extension.active
+          ? `${mark(true)} extension active — newest session state ${age(r.extension.ageMs)} old`
+          : `${mark(false)} no session state recorded — the extension has not run in this repository`,
+      );
+    } else {
+      lines.push(
+        r.hooks.everRan
+          ? `${mark(true)} hooks have run: ${Object.entries(r.hooks.runs)
+              .map(([k, v]) => `${k} at ${v}`)
+              .join(", ")}`
+          : `${mark(false)} no hook has recorded a run for this session — after a fresh session, inspect host hook configuration and the worker-node result above`,
+      );
+    }
   }
 
   return lines.join("\n");

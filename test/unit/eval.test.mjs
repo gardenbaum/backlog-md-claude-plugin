@@ -51,6 +51,7 @@ test("comparative evaluation totals each model independently", () => {
         unplannedStarts: 1,
         unfinishedSessions: 0,
         steeringMessages: 1,
+        tasklessContinues: 0,
       },
       second: {
         guards: 0,
@@ -59,6 +60,7 @@ test("comparative evaluation totals each model independently", () => {
         unplannedStarts: 0,
         unfinishedSessions: 0,
         steeringMessages: 0,
+        tasklessContinues: 0,
       },
     },
   );

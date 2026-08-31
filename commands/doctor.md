@@ -2,47 +2,43 @@
 description: Diagnose the backlog-md plugin — CLI reachability, project discovery, active task, cache, and hook health.
 ---
 
-Run the diagnosis and report it to the user:
+Run the diagnosis once:
 
 ```bash
 "${BACKLOG_MD_NODE:-node}" "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" doctor
 ```
 
-Present the output as-is. A line marked `warn` is a Backlog.md setting that
-changes what this plugin does — somebody's decision, not a broken install, so
-report it and leave it alone unless the user asks:
+Then report it in this shape and no other: the output as-is, followed by one
+line per `warn` and one line per `FAIL`, in the order they appear, each naming
+the consequence and the fix. No summary, no second run, no repetition, and no
+fix attempt unless the user asks for one.
 
-- **autoCommit: true** — the `SessionEnd` flush of modified files lands as a
-  commit nobody reviewed, carrying a `Task:` trailer.
-- **bypassGitHooks: true** — Backlog.md commits with `--no-verify`, so the
-  pre-commit tripwire runs on no commit it makes; CI's `tasks` job is then the
-  only check left.
+A `warn` is a Backlog.md setting somebody chose, not a broken install:
+
+- **autoCommit: true** — the `SessionEnd` flush becomes a commit nobody
+  reviewed, with a `Task:` trailer.
+- **bypassGitHooks: true** — Backlog.md commits with `--no-verify`; CI's
+  `tasks` job is the only check left.
 - **onStatusChange** — a shell command of the project's own runs on every
-  status change, including the one `/backlog-md:start` performs, so that
-  command's latency and side effects are not the plugin's.
+  status change, `/backlog-md:start`'s included.
 
-Then, for any line marked `FAIL`, explain the consequence and the fix in one
-sentence each:
+A `FAIL` and what fixes it:
 
-- **worker node not reachable** — detached OMP sweep/shutdown workers, slash
-  command wrappers, and optional git hooks cannot run; set `BACKLOG_MD_NODE` to
-  an absolute Node 18+ executable available to the host.
-- **OMP `<operation>` failed** — that adapter operation has not had a newer
-  successful attempt; report its timestamp and message, then retry the named
-  lifecycle action before claiming it recovered.
-- **backlog not reachable** — the plugin is inert; install it with `npm i -g backlog.md`.
-- **no Backlog.md project** — run `backlog init` in this repository first.
-- **no 'In Progress' column** — status-based resolution is off; use a branch
-  named after the task, or set it explicitly with
-  `backlog task edit <id> -s "In Progress"`.
-- **active task: ambiguous** — more than one task is In Progress. Ask the user
-  which one; do not pick for them.
-- **git hooks installed but they resolve to no plugin** — the hooks look for
-  the plugin when they run and found none, so they are silent no-ops;
-  reinstall the plugin, or re-run `/backlog-md:setup` from the copy you want
-  them to use.
-- **no hook has recorded a run** — after a fresh session, inspect host hook
-  configuration and the diagnosis's separate worker-node result; absence alone
-  does not prove which prerequisite failed.
-
-Do not attempt to fix anything without being asked.
+- **worker node not reachable** — detached workers, command wrappers and git
+  hooks cannot run; set `BACKLOG_MD_NODE` to an absolute Node 18+ executable.
+- **OMP `<operation>` failed** — no newer success for it; give its timestamp
+  and retry that lifecycle action before calling it recovered.
+- **backlog not reachable** — the plugin is inert; `npm i -g backlog.md`.
+- **no Backlog.md project** — run `backlog init` here first.
+- **no 'In Progress' column** — status resolution is off; name the task in the
+  branch, or `backlog task edit <id> -s "In Progress"`.
+- **active task: ambiguous** — ask which one; do not pick.
+- **registered but the directory is gone** — an uninstall in the other scope
+  took the shared copy; reinstall with `--force`.
+- **git hooks resolve to no plugin** — they are silent no-ops; re-run
+  `/backlog-md:setup` from the copy they should run.
+- **no hook has recorded a run** — Claude Code only; inspect host hook
+  configuration and the worker-node line, which absence alone cannot choose
+  between.
+- **no session state recorded** — every other host, where the in-process
+  extension replaces the hooks; check that it is installed and loaded here.

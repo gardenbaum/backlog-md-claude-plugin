@@ -87,6 +87,7 @@ test("Doctor renders recent per-session behavior counters", async () => {
         unplannedStarts: 1,
         unfinishedSessions: 1,
         steeringMessages: 1,
+        tasklessContinues: 0,
       },
     },
   ]);
@@ -114,6 +115,7 @@ test("Doctor reports counters for a session whose flush already removed its jour
         unplannedStarts: 0,
         unfinishedSessions: 0,
         steeringMessages: 0,
+        tasklessContinues: 0,
       },
     },
   ]);
@@ -161,6 +163,7 @@ test("Doctor reports the counters of a session the sweep collected", async () =>
         unplannedStarts: 0,
         unfinishedSessions: 0,
         steeringMessages: 1,
+        tasklessContinues: 0,
       },
     },
   ]);
@@ -314,6 +317,30 @@ test("the formatted report still reports hook reachability when there is a proje
   const r = await collectDoctor({ cwd: projectDir(), sessionId: "fresh-session-2" });
   const output = formatDoctor(r);
   assert.ok(output.includes("no hook has recorded a run"));
+});
+
+// A host that names no session has no hooks either, so the hook check would
+// fail by construction and send the reader after a process that was never
+// meant to run here (BCC-2).
+test("a host without a session id is diagnosed on extension liveness, not on hooks", async () => {
+  const root = projectDir();
+  appendEvent(root, "omp-session", { t: "metric", name: "guard" });
+
+  const r = await collectDoctor({ cwd: root });
+  assert.equal(r.hooks.host, "extension");
+  assert.equal(r.extension.active, true);
+  assert.equal(r.cache.path, null, "the cli.json fallback path must not be reported");
+
+  const output = formatDoctor(r);
+  assert.match(output, /ok {3}extension active — newest session state \d+s old/);
+  assert.ok(!output.includes("hook has recorded a run"));
+  assert.ok(!output.includes("cache "));
+});
+
+test("a host without a session id and without session state fails on the extension", async () => {
+  const output = formatDoctor(await collectDoctor({ cwd: projectDir() }));
+  assert.match(output, /FAIL no session state recorded — the extension has not run in this repository/);
+  assert.ok(!output.includes("hook has recorded a run"));
 });
 
 test("the guard is reported enabled by default", async () => {

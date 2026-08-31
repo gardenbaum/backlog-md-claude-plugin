@@ -32,9 +32,10 @@ test("no PreCompact hook is registered, because its output cannot be accepted", 
 // Not a literal restated back: this matcher IS the write protection. Drop a
 // tool from it and the PreToolUse guard stops seeing that tool's writes, with
 // a green suite (BCC-53). Same for Bash in PostToolUse, which is the only way
-// a backlog mutation is ever observed.
+// a backlog mutation is ever observed. Bash is in PreToolUse for one command
+// only: `backlog init` onto an existing configuration (BCC-9).
 test("the guard matchers name every tool whose writes they have to see", () => {
-  assert.equal(manifest.hooks.PreToolUse[0].matcher, "Write|Edit|NotebookEdit");
+  assert.equal(manifest.hooks.PreToolUse[0].matcher, "Write|Edit|NotebookEdit|Bash");
   assert.equal(manifest.hooks.PostToolUse[0].matcher, "Write|Edit|NotebookEdit|Bash");
 });
 

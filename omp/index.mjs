@@ -2,7 +2,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMMAND_NAMES, loadCommandTemplate, renderCommandTemplate } from "../lib/commands.mjs";
 import { resolveActiveTask } from "../lib/active-task.mjs";
-import { createRuntimeFailureState } from "../lib/cache.mjs";
+import { createRuntimeFailureState, deriveSession } from "../lib/cache.mjs";
 import {
   evaluateToolGuard,
   promptContext,
@@ -45,6 +45,17 @@ function contextMessage(customType, content) {
   };
 }
 
+/** Did this session touch Backlog.md at all — a native tool, a CLI mutation, or a task it resolved? */
+function touchedBacklog(session) {
+  return Boolean(session.taskId) || session.stale || Object.keys(session.metrics.toolCalls).length > 0;
+}
+
+/** Name the changed files, capped: the continuation is a nudge, not a diff. */
+function listed(files, limit = 5) {
+  const shown = files.slice(0, limit).join(", ");
+  return files.length > limit ? `${shown} and ${files.length - limit} more` : shown;
+}
+
 function hasAstEditTargetMetadata(details) {
   return (
     details !== null &&
@@ -61,6 +72,7 @@ export default function backlogMdExtension(
   const pendingPrompts = new Map();
   const acceptanceChecksBySession = new Set();
   const steeredTasksBySession = new Map();
+  const continuedSessions = new Set();
   const latestSuccess = new Map();
   // This is a process-local ordering token, not a wall-clock timestamp. It is
   // seeded from Date.now(), then increments when events share a millisecond or
@@ -310,6 +322,50 @@ export default function backlogMdExtension(
     }
   });
 
+  // The other half of the acceptance steering above, and the half that does
+  // not depend on the model having read a rule: `turn_end` steers a task that
+  // was started and left open, this steers work for which no task was ever
+  // created. Both were measured: a session that finds no matching task drops
+  // out of the workflow entirely and plans in the host's todo list instead.
+  //
+  // One continuation per session, ours, not the host's — its budget is eight,
+  // and leaning on it would push the model onward eight times over. And never
+  // `decision: "block"`: ending a session without a task stays the user's call.
+  pi.on("session_stop", async (_event, ctx) => {
+    const startedAt = attemptStartedAt();
+    const id = sessionId(ctx);
+    try {
+      const project = continuedSessions.has(id) ? null : findProject(ctx.cwd);
+      const session = project ? deriveSession(project.root, id) : null;
+      // Two sessions that must never be held open: one that changed nothing,
+      // and one that already worked through Backlog.md — a task finished
+      // properly leaves no active task behind either, and asking that session
+      // for a second one would punish the workflow it just followed.
+      if (!session || session.pendingModifiedFiles.length === 0 || touchedBacklog(session)) {
+        clearFailure("taskless continuation", ctx, startedAt);
+        return;
+      }
+      const active = await resolveActiveTask({ cwd: ctx.cwd });
+      if ("task" in active) {
+        clearFailure("taskless continuation", ctx, startedAt);
+        return;
+      }
+      continuedSessions.add(id);
+      recordSessionMetric({ cwd: ctx.cwd, sessionId: id, name: "taskless-continue" });
+      clearFailure("taskless continuation", ctx, startedAt);
+      return {
+        continue: true,
+        additionalContext: notice(
+          `This session changed ${listed(session.pendingModifiedFiles)} outside backlog/, and no Backlog.md task ` +
+            "covers that work. " +
+            "Create one with backlog_task_create, then record what you did in it before finishing.",
+        ),
+      };
+    } catch (error) {
+      report("taskless continuation", error, ctx, startedAt);
+    }
+  });
+
   pi.on("tool_result", (event, ctx) => {
     const startedAt = attemptStartedAt();
     try {
@@ -386,7 +442,9 @@ export default function backlogMdExtension(
     try {
       const template = loadCommandTemplate(pluginRoot, name);
       pi.registerCommand(`backlog-md:${template.name}`, {
-        description: template.description,
+        // Both entries carry the same name in the picker; the suffix is what
+        // tells the reader which of the two rows is the one that runs.
+        description: `${template.description} (native)`,
         handler: async (args) => {
           pi.sendUserMessage(renderCommandTemplate(template, pluginRoot, args));
         },

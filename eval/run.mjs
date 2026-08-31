@@ -155,6 +155,7 @@ function emptyMetrics() {
     unplannedStarts: 0,
     unfinishedSessions: 0,
     steeringMessages: 0,
+    tasklessContinues: 0,
   };
 }
 
@@ -164,6 +165,8 @@ function addMetrics(total, metrics) {
   total.unplannedStarts += metrics.unplannedStarts;
   total.unfinishedSessions += metrics.unfinishedSessions;
   total.steeringMessages += metrics.steeringMessages;
+  // Sessions summarised before BCC-4 carry no such counter.
+  total.tasklessContinues += metrics.tasklessContinues ?? 0;
   for (const [tool, count] of Object.entries(metrics.toolCalls)) {
     total.toolCalls[tool] = (total.toolCalls[tool] ?? 0) + count;
   }

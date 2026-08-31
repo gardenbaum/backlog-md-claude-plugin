@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import backlogMdExtension from "../../omp/index.mjs";
 import { COMMAND_NAMES } from "../../lib/commands.mjs";
 import {
+  appendEvent,
   clearJournal,
   deriveSession,
   listSessionSummaries,
@@ -113,6 +114,7 @@ test("the package adapter registers native OMP lifecycle, prompt, tool, and comm
     "session_compact",
     "session_shutdown",
     "session_start",
+    "session_stop",
     "session_switch",
     "session_tree",
     "tool_call",
@@ -188,6 +190,66 @@ test("an unchecked active task gets one end-of-turn steering message", async (t)
   assert.equal(deriveSession(project.root, "omp-steering").metrics.steeringMessages, 1);
 });
 
+// The case the end-of-turn steering above cannot reach: no task was ever
+// created, so there is nothing to steer about until the model stops (BCC-4).
+test("work without any task is continued once at session stop", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-taskless");
+  appendEvent(project.root, "omp-taskless", { t: "edit", p: "src/post.md" });
+
+  const first = await pi.events.get("session_stop")({}, ctx);
+  const second = await pi.events.get("session_stop")({}, ctx);
+
+  assert.equal(first.continue, true);
+  assert.equal(first.decision, undefined, "the user must stay able to end the session");
+  assert.match(first.additionalContext, /src\/post\.md/);
+  assert.match(first.additionalContext, /backlog_task_create/);
+  assert.equal(second, undefined, "one continuation per session, not the host's eight");
+  assert.equal(deriveSession(project.root, "omp-taskless").metrics.tasklessContinues, 1);
+});
+
+test("an active task ends its session without a taskless continuation", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const id = await project.createTask("Already tracked", ["--ac", "Criterion remains open"]);
+  await project.cli(["task", "edit", id, "-s", "In Progress"]);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  appendEvent(project.root, "omp-tracked", { t: "edit", p: "src/post.md" });
+
+  assert.equal(await pi.events.get("session_stop")({}, context(project.root, "omp-tracked")), undefined);
+  assert.equal(deriveSession(project.root, "omp-tracked").metrics.tasklessContinues, 0);
+});
+
+test("a session that already worked through Backlog.md is left alone", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  // What a finished task leaves behind: tools were used, and no task is active
+  // any more because the model set the last one to Done.
+  appendEvent(project.root, "omp-finished", { t: "metric", name: "tool", tool: "backlog_task_finish" });
+  appendEvent(project.root, "omp-finished", { t: "edit", p: "src/post.md" });
+
+  assert.equal(await pi.events.get("session_stop")({}, context(project.root, "omp-finished")), undefined);
+});
+
+test("a session that changed nothing is never held open for a task", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+
+  assert.equal(await pi.events.get("session_stop")({}, context(project.root, "omp-question")), undefined);
+});
+
 test("native Backlog tools execute lifecycle mutations without a shell command", async (t) => {
   if (!(await backlogAvailable())) return t.skip("backlog not installed");
   const project = await makeProject();
@@ -248,6 +310,7 @@ test("native Backlog tools execute lifecycle mutations without a shell command",
     unplannedStarts: 1,
     unfinishedSessions: 0,
     steeringMessages: 0,
+    tasklessContinues: 0,
   });
 });
 
@@ -258,6 +321,18 @@ test("every file command has a native OMP registration", () => {
     .sort();
 
   assert.deepEqual([...COMMAND_NAMES].sort(), fileCommands);
+
+  // OMP does not substitute ${CLAUDE_PLUGIN_ROOT} in a command body, so a
+  // command that exists only as a file would ship that literal to the model.
+  // The registration has to come from the directory, not from a list beside it.
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  assert.deepEqual(
+    [...pi.commands.keys()].sort(),
+    fileCommands.map((name) => `backlog-md:${name}`),
+  );
+  // Both entries appear in the picker under the same name; only this one runs.
+  for (const [, options] of pi.commands) assert.match(options.description, /\(native\)$/);
 });
 
 test("OMP commands render the installed root and arguments without ambient Claude variables", async () => {

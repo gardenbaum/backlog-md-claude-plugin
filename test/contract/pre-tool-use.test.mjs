@@ -115,3 +115,39 @@ test("malformed input does not deny anything", async () => {
   assert.equal(r.code, 0);
   assert.equal(r.stdout.trim(), "");
 });
+
+const initCommand = (root) => ({
+  session_id: "s5",
+  cwd: root,
+  tool_name: "Bash",
+  tool_input: { command: "backlog init" },
+});
+
+// The accident this guards against happened here: an init in a repository
+// that already had one replaced backlog/config.yml with defaults (BCC-9).
+test("`backlog init` on an existing project is refused, naming the file and both ways forward", async () => {
+  const root = project();
+  const r = await feed(initCommand(root), root);
+  assert.equal(r.code, 0);
+  const output = parseHookOutput(r, "PreToolUse").hookSpecificOutput;
+  assert.equal(output.permissionDecision, "deny");
+  assert.match(output.permissionDecisionReason, /backlog\/config\.yml/);
+  assert.match(output.permissionDecisionReason, /backlog config set/);
+  assert.match(output.permissionDecisionReason, /move or delete/i);
+});
+
+test("`backlog init` where there is no project runs untouched", async () => {
+  const empty = mkdtempSync(join(tmpdir(), "bcc-init-"));
+  const r = await feed({ ...initCommand(empty), cwd: empty }, empty);
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout.trim(), "", "the init that creates a project must not be blocked");
+});
+
+test("every other shell command passes the Bash matcher untouched", async () => {
+  const root = project();
+  for (const command of ["backlog task list --plain", "npm test", "git init"]) {
+    const r = await feed({ ...initCommand(root), tool_input: { command } }, root);
+    assert.equal(r.code, 0);
+    assert.equal(r.stdout.trim(), "", command);
+  }
+});

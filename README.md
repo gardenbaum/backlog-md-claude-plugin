@@ -70,8 +70,14 @@ OMP's Claude-plugin compatibility provider also discovers the Markdown command
 files. The native extension deliberately registers each name once, and OMP
 dispatches extension commands before file commands, so there is one effective
 `/backlog-md:*` implementation: the native handler that renders the installed
-root and never depends on an ambient `CLAUDE_PLUGIN_ROOT`. A shadowed Markdown
-copy may still appear in OMP's command-source diagnostics.
+root and never depends on an ambient `CLAUDE_PLUGIN_ROOT`.
+
+That is why every command appears twice in OMP's autocomplete — once from the
+extension, once as the Markdown file behind it. Both entries carry the same
+name, so both run the native handler whichever you pick; the extension's
+description ends in `(native)` to say which row is which. The duplication
+cannot be removed: both hosts read the same `.claude-plugin/plugin.json`, and
+its `commands` key cannot be hidden from one host and kept for the other.
 
 Then run `/backlog-md:setup` — it diagnoses the install and offers to install
 the optional git hooks. Do this before anything else; every other command
@@ -87,7 +93,8 @@ The host-specific wiring differs; the behavior does not:
 | `UserPromptSubmit` | `input` + `before_agent_start` | A turn-boundary observation: surfaces a task named in the prompt that isn't the active one, reports what changed on the active task since it was last checked, and nudges toward starting a task before writing code — only when the CLI positively reports an empty In Progress column, never when it could not answer. Never blocks. |
 | `PostToolUse` | `tool_result` | Records edited files and backlog-mutating shell commands for the next prompt observation and session shutdown to read later. Never denies, never calls the CLI itself. |
 | `SessionEnd` | `session_shutdown` | Flushes the session's modified-file list onto the active task, then discards the session cache. Both adapters hand the flush to a detached Node child so host shutdown cannot cancel it. OMP uses `BACKLOG_MD_NODE` when set. |
-| `PreToolUse` | `tool_call` | Redirects direct writes to Backlog.md-managed files to the CLI. Claude covers `Write`/`Edit`/`NotebookEdit`; OMP covers `write`, `edit`, `ast_edit`, and mutating `lsp` operations, including `ast_edit`/`lsp` mounted through top-level `write xd://…` calls. The plugin's only block. |
+| — | `turn_end`, `session_stop` | OMP only. One reminder per task when a turn ends with acceptance criteria still open, and one continuation per session when it ends having changed files outside `backlog/` with no task covering them — the point at which the model would otherwise leave work untracked. Both are messages, capped at one each; neither can stop you from ending the session. |
+| `PreToolUse` | `tool_call` | Redirects direct writes to Backlog.md-managed files to the CLI. Claude covers `Write`/`Edit`/`NotebookEdit`; OMP covers `write`, `edit`, `ast_edit`, and mutating `lsp` operations, including `ast_edit`/`lsp` mounted through top-level `write xd://…` calls. One shell command is refused too: a `backlog init` that would land on an existing `config.yml` and replace it with defaults. The plugin's only block. |
 
 The active task is resolved by checking the current branch name for a task id
 first, then by finding exactly one task in the `In Progress` column. More
@@ -123,6 +130,34 @@ milliseconds, because one CLI call is ~250ms on this machine; everything that
 does not is single-digit milliseconds. That is why `UserPromptSubmit` gates
 its identity refetch on there having been edits — most turns skip it and cost
 4ms.
+
+That floor is also the argument for installing per project under Claude Code.
+Its matchers start a process for every prompt, every `Write`/`Edit`/
+`NotebookEdit` and every `Bash` call, in every repository the plugin is
+installed for — including ones with no `backlog/` directory, where each of
+those processes finds nothing to do and exits. The work is zero; the startup
+is not, and it is not optimisable, because it is Node starting. A session with
+sixty shell calls, forty edits and twenty prompts spends seconds there. Under
+OMP the same global install costs nothing comparable: `omp/index.mjs` is
+loaded in-process once, no event starts a process, and a project without a
+backlog carries only the always-applied rule.
+
+The prompt-side cost is larger than the file sizes suggest, because Claude
+Code counts every command as a skill. `claude plugin details backlog-md`, run
+in a config directory holding no other plugin, reports nine — the one real
+skill, `skills/backlog-workflow`, plus the eight commands — and `Always-on:
+~369 tok`. Measured against a recording endpoint, a session in a repository
+*without* a `backlog/` directory carries 1663 bytes more than the same session
+with the plugin disabled, and 2048 bytes with one. That is the second half of
+the argument for project scope: those bytes are paid in every session of every
+repository the plugin is installed for, backlog or not.
+
+OMP charges less for the same package: 907 bytes where there is no backlog —
+`rules/backlog-md-contract.md`, applied always and pinned under 1 KB by a test
+— and 1163 bytes where there is one, plus the six task tools, which exist only
+there. `rules/backlog-md-quoting.md` is applied conditionally, when a
+`backlog task edit|create` line is in play, and the skill body is read on
+invocation rather than kept loaded.
 
 The one expensive row that happens every session is `SessionStart`, and the
 per-turn worst case — a prompt naming three task ids that do not exist, each
@@ -316,6 +351,12 @@ reads.
   `session_compact` event and injects the same fresh brief there.
 - Two concurrent sessions that resolve their task by status see the same
   task.
+- OMP's prewalk hands the session from the active model to a faster one after
+  the first completed `edit` or `write`, so a session run with it enabled has
+  two models behind one set of counters and none of them can be attributed.
+  `npm run eval` passes `--no-prewalk` for that reason; `/backlog-md:doctor`
+  cannot, since it only reads what a session already recorded. Read counters
+  from a prewalk session as belonging to the session, not to a model.
 - Path classification is lexical: the deny decision compares the edited path
   against the backlog directory as text and never calls `realpath`. A symlink
   living outside the backlog directory but pointing at a managed task file is

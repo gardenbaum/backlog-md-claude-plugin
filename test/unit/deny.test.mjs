@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { denyReason } from "../../lib/deny.mjs";
+import { denyReason, initReason } from "../../lib/deny.mjs";
 
 const task = { managed: true, kind: "task", taskId: "BACK-12" };
 
@@ -150,4 +150,17 @@ test("every command line the reason emits survives `bash -n`", () => {
     denyReason({ managed: true, kind: "doc", taskId: "doc-1" }, {}),
   ];
   for (const reason of cases) assertPasteable(reason);
+});
+
+// A refusal that only says no gets worked around. The three things it has to
+// carry are the file at risk and both ways forward — one setting, or a
+// deliberate re-init (BCC-9).
+test("initReason names the config file and both ways forward", () => {
+  const reason = initReason("backlog/config.yml");
+  assert.match(reason, /backlog\/config\.yml/);
+  assert.match(reason, /backlog config set/);
+  assert.match(reason, /move or delete/i);
+  const line = reason.match(/^ {2}(backlog config set.*)$/m)?.[1];
+  assert.ok(line, "the config-set form is offered as a pasteable line");
+  assert.equal(spawnSync("bash", ["-n"], { input: line, encoding: "utf8" }).status, 0, line);
 });
