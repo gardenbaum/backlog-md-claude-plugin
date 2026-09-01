@@ -22,6 +22,44 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.6 — 2026-09-01
+
+One defect and the five that hid it. A `/backlog-md:decompose` run against an
+empty backlog created no task at all: every call was refused, and every other
+door the plugin offers turned out to be closed too.
+
+- `backlog_task_create` accepts a task that waits for nothing. `dependencies`
+  was optional but declared `minItems: 1`, and the host validates the schema
+  before the tool runs, so an explicit empty list was refused without a word
+  from the plugin. Every task in an empty backlog is a root task, so the first
+  one could not be created at all — measured: five refusals, then the model
+  concluded that Backlog.md forbids a task without a predecessor.
+- `/backlog-md:decompose` says that a task waiting for nothing leaves
+  `dependencies` out. Read as if the field were mandatory, the page turned one
+  proposed task into three invented ones — a content audit, an image, the post
+  — purely to give the graph an edge, before failing to create any of them.
+- The contract rule names the `backlog` CLI as the fallback when a tool
+  *refuses* a call, not only when one is missing. `backlog task create` with no
+  `--dep` would have worked throughout; the rule read as forbidding it, and the
+  session called the deadlock structural instead.
+- A shell redirect into a Backlog.md file is refused like a write tool.
+  `Write` and `Edit` were guarded and the shell was not, so the refusal taught
+  the detour: two denied writes were answered with `cat > 'backlog/tasks/EDG-1
+  - ….md'`, narrated as such. Redirects and `tee` are covered; `cp`, `mv` and
+  `sed -i` name their target positionally and stay unguarded, because the deny
+  path refuses only what it can identify exactly.
+- Refusing a task file that does not exist yet names `backlog task create`.
+  It named `backlog task edit <id>`, which answers "not found" for a task with
+  no files. The reason now also gives the fact behind the vanishing act:
+  Backlog.md indexes tasks by filename and reads only a lowercase id prefix, so
+  the hand-written `EDG-1 - ….md` was invisible to `backlog task list` while
+  `edg-1 - ….md` is listed (measured on 1.50.1) — twenty turns of the session
+  went into looking for that.
+- `backlog_next` tells an empty backlog apart from a blocked one. Both used to
+  print the same sentence about open dependencies, so a session with nothing to
+  be blocked by went hunting for the blockage. The whole backlog is counted
+  only when nothing is ready, so the ordinary call still costs one list.
+
 ## 0.3.5 — 2026-09-01
 
 Six defects from a third OMP session on the same host model. All of them cost
