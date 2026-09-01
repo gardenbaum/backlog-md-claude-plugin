@@ -14,6 +14,11 @@ so and stop. `/backlog-md:next` picks one; guessing does not.
 **Dispatch the `backlog-planner` agent** with the task id. It researches and
 returns a plan. It does not write it.
 
+**If the dispatch fails, retry it once and no more.** Read
+`${CLAUDE_PLUGIN_ROOT}/agents/backlog-planner.md`, do that research inline in
+this session, and carry on to checkpoint 2 — saying that the agent was
+unavailable.
+
 **When it returns — this is checkpoint 2.** Present the plan. Lead with
 anything the planner flagged as disagreeing with the task description, or as
 already implemented; those change what should be built and are easy to miss in

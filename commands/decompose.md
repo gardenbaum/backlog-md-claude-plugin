@@ -9,6 +9,14 @@ The idea is: `$ARGUMENTS`. If that is empty, ask what to decompose and stop.
 repository it is working in. It reads a lot of code, which is why it has its
 own context window.
 
+**If the dispatch fails, retry it once and no more.** A host that has no
+subagents, or whose dispatch tool rejects the call twice, is not going to
+accept the third attempt. Read
+`${CLAUDE_PLUGIN_ROOT}/agents/backlog-decomposer.md`, do that research inline
+in this session, and carry on to checkpoint 1 — saying that the agent was
+unavailable. A decomposition done here is worth more than a dispatch that never
+lands.
+
 **When it returns — this is checkpoint 1.** Present its proposals to the user
 as a short list: title, one line of intent, the acceptance criteria count, and
 the milestone if it named one. Show the duplicates it found first if there are

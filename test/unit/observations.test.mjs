@@ -89,3 +89,22 @@ test("looksLikeBuildIntent recognises building and ignores asking", () => {
     assert.equal(looksLikeBuildIntent(p), false, String(p));
   }
 });
+
+// The measured miss (BCC-2): a German session got no nudge and created no task.
+test("looksLikeBuildIntent recognises German building and ignores asking", () => {
+  for (const p of [
+    "Bitte erstelle 3 neue Blogbeiträge mit mehr Business Fokus als Technik.",
+    "Behebe den Fehler im Login",
+    "Baue ein neues Modul",
+    "Füge einen Endpunkt hinzu",
+    "ändere die Konfiguration",
+    "Wir sollten das Modul erweitern",
+  ]) {
+    assert.equal(looksLikeBuildIntent(p), true, p);
+  }
+  // `bau` as a stem must not fire on the noun it is buried in, and a question
+  // stays a question in either language.
+  for (const p of ["Was macht diese Funktion?", "Erkläre den Cascade-Mechanismus", "Der Baum im Garten"]) {
+    assert.equal(looksLikeBuildIntent(p), false, p);
+  }
+});

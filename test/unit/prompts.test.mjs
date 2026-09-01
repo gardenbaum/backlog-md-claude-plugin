@@ -213,6 +213,24 @@ test("commands dispatch only agents this plugin ships", () => {
   }
 });
 
+// A dispatch a host refuses is not a rare edge: an OMP session rejected the
+// same call ten times and never produced a decomposition (BCC-2). Each command
+// that dispatches an agent therefore has to bound the retries and name the
+// inline fallback, which is the agent's own prompt file.
+test("every command that dispatches an agent bounds the retries and falls back inline", () => {
+  for (const name of COMMANDS) {
+    const text = read(join("commands", `${name}.md`));
+    const dispatched = [...text.matchAll(/\*\*Dispatch the `(backlog-[a-z0-9-]+)` agent\*\*/g)].map((m) => m[1]);
+    for (const agent of dispatched) {
+      assert.match(text, /retry it once and no more/i, `${name}: dispatches ${agent} with no retry ceiling`);
+      assert.ok(
+        text.includes(`\${CLAUDE_PLUGIN_ROOT}/agents/${agent}.md`),
+        `${name}: no inline fallback pointing at ${agent}.md`,
+      );
+    }
+  }
+});
+
 // The review checkpoint: the gate sentence must precede the write it guards.
 test("verify's gate instructs asking and waiting before any criterion is checked", () => {
   const text = read(join("commands", "verify.md"));

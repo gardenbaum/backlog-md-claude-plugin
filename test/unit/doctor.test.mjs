@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, w
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { collectDoctor, formatDoctor, HOOK_MARKER, HOOK_NAMES } from "../../scripts/backlog-cc.mjs";
+import { backlogCliHint, collectDoctor, formatDoctor, HOOK_MARKER, HOOK_NAMES } from "../../scripts/backlog-cc.mjs";
 import {
   appendEvent,
   clearJournal,
@@ -694,4 +694,22 @@ test("doctor says nothing about stranding when the hooks are where git reads the
   }
   const output = formatDoctor(await collectDoctor({ cwd: root, sessionId: "s" }));
   assert.ok(!output.includes("they never run"), "reported stranding for a normal install");
+});
+
+// An agent that meets this wrapper in a command template reads it as "the
+// Backlog.md CLI, here" and addresses it with `task list` or `instructions
+// overview` (BCC-2, measured on OMP). The bare usage line named neither the
+// real CLI nor a command to run, so the guess was simply repeated.
+test("a Backlog.md command sent to backlog-cc names the CLI that owns it", () => {
+  const hint = backlogCliHint(["task", "list", "-s", "To Do", "--plain"]);
+  assert.match(hint, /not the Backlog\.md CLI/);
+  // Runnable as printed: `To Do` is two words and has to come back quoted.
+  assert.match(hint, /backlog task list -s 'To Do' --plain/);
+  assert.match(backlogCliHint(["instructions", "overview"]), /backlog instructions overview/);
+});
+
+test("backlog-cc's own commands and unrelated typos get no CLI hint", () => {
+  for (const args of [["doctor"], ["brief", "BCC-1"], ["bogus"], []]) {
+    assert.equal(backlogCliHint(args), "", args.join(" "));
+  }
 });

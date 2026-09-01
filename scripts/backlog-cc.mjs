@@ -731,6 +731,44 @@ export function formatDoctor(r) {
   return lines.join("\n");
 }
 
+/**
+ * The Backlog.md CLI's own commands. Agents that meet this wrapper in a command
+ * template read it as "the way to call Backlog.md here" and address it with
+ * `task list` or `instructions overview` (BCC-2, measured). The bare usage line
+ * never named the CLI that does own those, so the guess was repeated.
+ */
+const BACKLOG_CLI_COMMANDS = new Set([
+  "task",
+  "draft",
+  "doc",
+  "decision",
+  "milestone",
+  "search",
+  "board",
+  "instructions",
+  "overview",
+  "sequence",
+  "cleanup",
+  "config",
+  "browser",
+  "init",
+  "agents",
+]);
+
+/** Single-quote what a shell would otherwise reinterpret, so the hint is runnable as printed. */
+function shellArg(value) {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/** `""` unless the args name a Backlog.md command, in which case the command to run instead. */
+export function backlogCliHint(args) {
+  if (!BACKLOG_CLI_COMMANDS.has(args[0])) return "";
+  return (
+    `\nbacklog-cc is the backlog-md plugin's own helper, not the Backlog.md CLI.\n` +
+    `Run this instead:\n  backlog ${args.map(shellArg).join(" ")}\n`
+  );
+}
+
 async function main() {
   const [command = "doctor", argument] = process.argv.slice(2);
 
@@ -901,7 +939,7 @@ async function main() {
   }
 
   process.stderr.write(
-    `unknown command: ${command}\nusage: backlog-cc [doctor|setup|active|active-id|brief [id]|next [limit]|install-hooks [--shared] [--force]|check-staged|check-tasks|sweep <session-id> [--include-self]|flush <session-id>]\n`,
+    `unknown command: ${command}${backlogCliHint(process.argv.slice(2))}\nusage: backlog-cc [doctor|setup|active|active-id|brief [id]|next [limit]|install-hooks [--shared] [--force]|check-staged|check-tasks|sweep <session-id> [--include-self]|flush <session-id>]\n`,
   );
 }
 
