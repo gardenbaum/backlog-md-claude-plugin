@@ -22,6 +22,42 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.4 — 2026-09-01
+
+Four defects from one further OMP session on the same host model, all in the
+native OMP surface.
+
+- The acceptance steering waits for the work it is about, and no longer
+  cancels a tool call to arrive. `turn_end` fires after every LLM turn, not at
+  the end of the exchange with the user, so the first boundary after a task
+  was started — before any work existed — carried the "unchecked acceptance
+  criteria … before finishing it" message, delivered as a `steer`. OMP cancels
+  in-flight tool calls to deliver one, and the model got "Skipped due to
+  pending system advisory" in place of the research it was waiting for. It now
+  waits until the session has edited a file outside `backlog/` and queues via
+  `nextTurn`, like the guard warning. The check also runs before
+  `resolveActiveTask`, so a turn that cannot steer no longer spawns the CLI.
+- The five mutating Backlog tools declare `concurrency: "exclusive"`.
+  Backlog.md locks a task per process; seven `backlog_check_ac` calls issued
+  as one batch left five with "is being modified by another process", and the
+  retry re-checked what had already succeeded, doubling its evidence notes.
+  The field is not part of OMP's `ToolDefinition`, but `applyToolProxy`
+  forwards every own key to the adapter the batch scheduler reads, and a host
+  that drops it is back to the previous behaviour rather than broken.
+  `backlog_next` stays shared.
+- `backlog_task_create` takes optional `dependencies`, `milestone` and
+  `parent`. Without them the native path could create the nodes of a
+  decomposition and nothing else, while the always-applied contract rule
+  forbids reaching for a handwritten shell command instead. One `--dep` per
+  id, which records the same graph as the documented comma form and cannot be
+  confused by an id containing a comma.
+- `backlog_task_finish` refuses a task whose acceptance criteria are still
+  open, naming their indices. Backlog.md itself sets Done regardless — a task
+  went Done with both of its criteria unchecked — so this is the only place
+  the contract can hold. A task the CLI cannot read is still allowed through,
+  rather than putting an unreachable CLI between the model and a finished
+  task.
+
 ## 0.3.3 — 2026-09-01
 
 Three defects measured in one OMP session on a smaller host model, fixed
