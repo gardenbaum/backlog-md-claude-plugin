@@ -22,6 +22,37 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.7 — 2026-09-01
+
+What a run that went right still failed to record. A `/backlog-md:decompose`
+against an empty backlog created its task, wrote the work and finished it with
+evidence for all six criteria — and left no plan, started the task after the
+work was done, spent an extra agent on research the decomposer does itself, and
+leaked its journal because the task it had finished was no longer active.
+
+- `backlog_task_start` names a missing implementation plan in its result
+  instead of only counting it. `unplannedStarts` was the single trace that a
+  session started, wrote a post, checked six criteria and finished without ever
+  planning — a number in a state file nobody reads.
+- `/backlog-md:decompose` dispatches the decomposer with the idea and the
+  repository path, verbatim and nothing else: no survey first, no telling it
+  what to propose. A session that briefed the agent with its own gap map and
+  its own acceptance criteria got back one no measurement could fail.
+- `/backlog-md:decompose` says where it ends and names `/backlog-md:start` as
+  the way into the work. Sliding from creating a task straight into doing it is
+  how the task got started after the fact and never planned.
+- The end-of-session flush writes the pending files onto the task the session
+  worked on, by id, when nothing is In Progress any more. The session that
+  finished its task was the only one whose journal never went: no later sweep
+  could find that task active again. A session that never had a task still
+  keeps its journal for the resume that starts one.
+- Native tool calls record which task they name, so the OMP path has a session
+  task id at all — it had none, which is why the flush above had no target.
+- `/backlog-md:doctor` lists only the sessions that recorded something. Each
+  subagent dispatch is a session that ends with every counter at zero, and
+  three of them per turn is enough to push the session that did the work off a
+  five-row report.
+
 ## 0.3.6 — 2026-09-01
 
 One defect and the five that hid it. A `/backlog-md:decompose` run against an
