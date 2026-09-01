@@ -110,6 +110,27 @@ test("an empty result says so instead of rendering an empty list", () => {
   assert.match(out, /no ready task/i);
 });
 
+// Nothing ready has two causes and two different next steps. The message named
+// only the blocked one, so a session facing an empty backlog went looking for a
+// blockage that was not there, while the task it needed was never written
+// (BCC-6).
+test("an empty backlog is told to create the first task; a blocked one is not", () => {
+  const empty = renderNext([], { status: "To Do", total: 0 });
+  assert.match(empty, /backlog task create/);
+  assert.match(empty, /no tasks at all/i);
+
+  const blocked = renderNext([], { status: "To Do", total: 4 });
+  assert.match(blocked, /no ready task/i);
+  assert.ok(!/backlog task create/.test(blocked), "work that exists is blocked, not missing");
+});
+
+test("findNext counts the whole backlog when nothing is ready", () =>
+  withMode("task-list-empty", async () => {
+    const r = await findNext(opts);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.total, 0, "the caller cannot tell an empty backlog from a blocked one without this");
+  }));
+
 // findNext had no tests at all before this. Two mutations both leave the
 // suite green without them: returning {ok: true, tasks: []} when the
 // status lookup fails, and the same when the task list itself fails. Under

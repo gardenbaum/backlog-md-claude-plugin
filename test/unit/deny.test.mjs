@@ -54,6 +54,26 @@ test("a managed file with no parsable id never emits a command with a made-up id
   assert.ok(!/BACK-/.test(reason));
 });
 
+// `backlog task edit` answers "not found" for a task that has none of its
+// files yet, so the refusal named a command that could not work. And the
+// filename is not cosmetic: Backlog.md lists `edg-1 - x.md` and ignores
+// `EDG-1 - x.md`, so the hand-written file was invisible to every later
+// lookup — measured on 1.50.1, after a session spent its turns hunting for
+// the reason (BCC-6).
+test("a task file that does not exist yet points at task create, not task edit", () => {
+  const reason = denyReason({ ...task, exists: false }, { content: "---\nid: BACK-12\n---\n" });
+  assert.match(reason, /would be a new Backlog\.md task file/);
+  assert.ok(commandLines(reason).some((line) => line.startsWith("backlog task create ")));
+  assert.ok(!/task edit/.test(reason), "there is nothing to edit yet");
+  assert.match(reason, /lowercase/, "the filename requirement is the reason a hand-written file vanishes");
+  assertPasteable(reason);
+});
+
+test("an existing task file is still treated as an edit, and so is one whose existence is unknown", () => {
+  assert.match(denyReason({ ...task, exists: true }, { new_string: "## Implementation Notes" }), /--append-notes/);
+  assert.match(denyReason(task, { new_string: "## Implementation Notes" }), /--append-notes/);
+});
+
 test("config files point at the config surface, not at task edit", () => {
   const reason = denyReason({ managed: true, kind: "config", taskId: null }, { content: "statuses: [a]" });
   assert.match(reason, /backlog config/);

@@ -370,13 +370,30 @@ test("a created task can name its dependencies, milestone and parent", async (t)
 
   const graph = await create("Depends on both", { dependencies: [first, second], milestone: "First release" });
   const child = await create("Belongs to a parent", { parent });
+  const rootTask = await create("Waits for nothing", { dependencies: [] });
 
   assert.equal(graph.isError, undefined, graph.content[0].text);
   assert.equal(child.isError, undefined, child.content[0].text);
+  assert.equal(rootTask.isError, undefined, rootTask.content[0].text);
   const created = await read("Depends on both");
   assert.deepEqual([...created.dependencies].sort(), [first, second].sort());
   assert.equal(created.milestone, "First release");
   assert.equal((await read("Belongs to a parent")).parentTaskId, parent);
+  assert.deepEqual((await read("Waits for nothing")).dependencies, []);
+});
+
+// `minItems: 1` on an optional array rejects an explicit empty one, and the
+// host validates before the tool runs, so nothing the plugin says is reached.
+// Every task in an empty backlog waits for nothing, so a decompose run against
+// one created no task at all — five refusals, then the model concluded the
+// first task was impossible and wrote a file by hand (BCC-6).
+test("the create tool requires a criterion but never a dependency", () => {
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const properties = pi.tools.get("backlog_task_create").parameters.properties;
+  assert.equal(properties.dependencies.minItems, undefined);
+  assert.equal(properties.acceptanceCriteria.minItems, 1, "a task with no criterion cannot be finished");
+  assert.match(properties.dependencies.description, /omit it for a task with no predecessor/i);
 });
 
 // More than one task In Progress makes `resolveActiveTask` ambiguous, and the
@@ -649,6 +666,9 @@ test("OMP blocks direct Backlog edits, warns in guard-off mode, and records sour
   backlogMdExtension(pi);
   const ctx = context(project.root, "omp-tools");
   const taskPath = join(project.root, "backlog", "tasks", "BACK-12 - Guard.md");
+  // Written first: an edit of a file that does not exist is a create, and gets
+  // the create reason instead (BCC-6).
+  writeFileSync(taskPath, "---\nid: BACK-12\n---\n");
   const editInput = { input: `[${taskPath}#A1B2]\nPUT >1:\n+changed` };
 
   const blocked = pi.events.get("tool_call")({ toolName: "edit", input: editInput }, ctx);

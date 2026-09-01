@@ -29,6 +29,9 @@ in dependency order so every dependency names an id that already exists:
   `dependencies` — the ids this task waits for. A decomposition is a
   dependency graph; created without them it is a list, and nothing downstream
   can tell what is ready.
+- A task that waits for nothing leaves `dependencies` out. The first task
+  always does, and so does every independent one. Never invent a predecessor
+  to give a task an edge, and never hold back a task because it would have none.
 - `milestone` only when the proposal named one. `parent` only for a subtask,
   and never a milestone id.
 - Create parents before children, and dependencies before dependents.
@@ -47,6 +50,7 @@ Rules that matter for that form:
 
 - Add `-m 'Milestone title'` only when the proposal named one; leave it off
   otherwise. `-m`/`--milestone` assigns by existing milestone id or title.
+- Same for `--dep`: a task with no predecessor is created without it.
 - Multi-line values: repeated `--append-*` flags, one invocation per line, is the recommended form. A real newline inside the quoted value works too. A literal `\n` does not — it is stored as text.
 - Single-quote any value containing backticks. Inside double quotes they are command substitution, and the original text cannot be recovered afterwards.
 

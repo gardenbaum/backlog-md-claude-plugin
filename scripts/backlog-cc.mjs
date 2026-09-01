@@ -934,7 +934,7 @@ async function main() {
     if (!project) return;
     const result = await findNext({ cwd: project.root, limit: Number(argument) || 3 });
     if (!result.ok) return;
-    process.stdout.write(renderNext(result.tasks, { status: result.status }) + "\n");
+    process.stdout.write(renderNext(result.tasks, { status: result.status, total: result.total }) + "\n");
     return;
   }
 

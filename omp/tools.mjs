@@ -114,7 +114,7 @@ export function registerBacklogTools(pi) {
       execute: async (_toolCallId, _params, _signal, _onUpdate, ctx) => {
         const result = await findNext({ cwd: ctx.cwd });
         return result.ok
-          ? textResult(renderNext(result.tasks, { status: result.status }), false, result)
+          ? textResult(renderNext(result.tasks, { status: result.status, total: result.total }), false, result)
           : textResult(`Backlog command failed: ${result.reason}`, true, result);
       },
     }),
@@ -241,12 +241,15 @@ export function registerBacklogTools(pi) {
           acceptanceCriteria: { type: "array", minItems: 1, items: nonEmptyText },
           // A decomposition is a dependency graph, and without these three the
           // native path could only create the nodes (BCC-4). Optional, so the
-          // ordinary single-task call is unchanged.
+          // ordinary single-task call is unchanged — and without `minItems`,
+          // which rejected an explicit empty array in the host's schema check
+          // before this tool ever ran. Every task in an empty backlog is a root
+          // task, so that refusal left no way to create the first one (BCC-6).
           dependencies: {
             type: "array",
-            minItems: 1,
             items: nonEmptyText,
-            description: "Task IDs this task depends on. They must already exist.",
+            description:
+              "Task IDs this task depends on. They must already exist. Omit it for a task with no predecessor.",
           },
           milestone: { ...nonEmptyText, description: "Existing milestone ID or title." },
           parent: { ...nonEmptyText, description: "Existing parent task ID, never a milestone ID." },

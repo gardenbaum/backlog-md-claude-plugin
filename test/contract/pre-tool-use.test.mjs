@@ -13,10 +13,13 @@ function shQuote(value) {
   return `'${String(value).split("'").join(`'\\''`)}'`;
 }
 
+// The task file exists, because the reason a hand-edit gets depends on it: an
+// existing file is being edited, a missing one is being created (BCC-6).
 function project() {
   const root = mkdtempSync(join(tmpdir(), "bcc-pre-"));
   mkdirSync(join(root, "backlog", "tasks"), { recursive: true });
   writeFileSync(join(root, "backlog", "config.yml"), "\n");
+  writeFileSync(join(root, "backlog", "tasks", "BACK-12 - Add OAuth.md"), "---\nid: BACK-12\n---\n");
   mkdirSync(join(root, "src"), { recursive: true });
   return root;
 }
@@ -117,6 +120,68 @@ test("a decision file that does not exist yet is denied, and points at 'decision
   const output = parseHookOutput(r, "PreToolUse").hookSpecificOutput;
   assert.equal(output.permissionDecision, "deny");
   assert.match(output.permissionDecisionReason, /backlog decision create/);
+});
+
+// The refusal used to name `backlog task edit`, which answers "not found" for a
+// task that does not exist. A session read that as a dead end and wrote the
+// file through a shell redirect instead (BCC-6).
+test("a task file that does not exist yet is denied, and points at 'task create'", async () => {
+  const root = project();
+  const r = await feed(
+    {
+      session_id: "s7",
+      cwd: root,
+      tool_name: "Write",
+      tool_input: {
+        file_path: join(root, "backlog", "tasks", "BACK-99 - Written by hand.md"),
+        content: "---\nid: BACK-99\n---\n",
+      },
+    },
+    root,
+  );
+  assert.equal(r.code, 0);
+  const reason = parseHookOutput(r, "PreToolUse").hookSpecificOutput.permissionDecisionReason;
+  assert.match(reason, /backlog task create/);
+  assert.ok(!/task edit/.test(reason), "a task that does not exist cannot be edited");
+});
+
+// Write and Edit were guarded and the shell was not, so the refusal taught the
+// detour: a session answered two denied writes with `cat > backlog/tasks/…`
+// and got the file it had just been refused (BCC-6).
+test("a shell redirect into a task file is denied like the write tools", async () => {
+  const root = project();
+  const file = join(root, "backlog", "tasks", "BACK-12 - Add OAuth.md");
+  const r = await feed(
+    {
+      session_id: "s8",
+      cwd: root,
+      tool_name: "Bash",
+      tool_input: { command: `cat > ${shQuote(file)} <<'EOF'\n## Implementation Notes\nstarted\nEOF` },
+    },
+    root,
+  );
+  assert.equal(r.code, 0);
+  const output = parseHookOutput(r, "PreToolUse").hookSpecificOutput;
+  assert.equal(output.permissionDecision, "deny");
+  assert.match(output.permissionDecisionReason, /BACK-12/);
+  assert.match(output.permissionDecisionReason, /--append-notes/);
+});
+
+// Reading one is the ordinary way to work with a backlog, and a guard that
+// refuses it would be worked around rather than followed.
+test("a shell command that only reads a task file is not the guard's business", async () => {
+  const root = project();
+  const r = await feed(
+    {
+      session_id: "s9",
+      cwd: root,
+      tool_name: "Bash",
+      tool_input: { command: `grep -c . ${shQuote(join(root, "backlog", "tasks"))}/*.md > /tmp/bcc-count` },
+    },
+    root,
+  );
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout.trim(), "", "reading a task file, and writing elsewhere, is not a hand-edit");
 });
 
 test("BACKLOG_MD_GUARD=0 turns the deny into a warning", async () => {

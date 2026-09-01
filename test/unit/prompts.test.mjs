@@ -33,6 +33,11 @@ test("OMP rules separate always-applied task ownership from CLI quoting guidance
   assert.match(contract.body, /supersede the Backlog\.md CLI instructions/);
   assert.match(contract.body, /todo list.*does not replace the task/is);
 
+  // A tool that exists but refuses the call is neither "no tool" nor a reason
+  // to hand-write the file. Without this the contract reads as a dead end, and
+  // a session took it as one (BCC-6).
+  assert.match(contract.body, /refuses the call[\s\S]*`backlog` CLI/);
+
   const quoting = frontmatter(read(join("rules", "backlog-md-quoting.md")));
   assert.match(quoting.fields.condition, /backlog task \(edit\|create\).*--append-/);
   for (const rule of QUOTING_RULES) assert.ok(quoting.body.includes(rule), `missing rule: ${rule}`);
@@ -244,6 +249,10 @@ test("decompose creates through the native tool, with the CLI form as its fallba
   for (const parameter of ["`dependencies`", "`milestone`", "`parent`"]) {
     assert.ok(text.includes(parameter), `decompose.md never names ${parameter}`);
   }
+  // Read as if dependencies were mandatory, this page turned one proposed task
+  // into three invented ones so the graph would have an edge, and then created
+  // none of them (BCC-6).
+  assert.match(text, /waits for nothing leaves `dependencies` out/);
 });
 
 // The review checkpoint: the gate sentence must precede the write it guards.
