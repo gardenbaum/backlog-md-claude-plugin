@@ -294,6 +294,20 @@ export default function backlogMdExtension(
         clearFailure("acceptance steering", ctx, startedAt);
         return;
       }
+      // `turn_end` fires after every LLM turn, not at the end of the exchange
+      // with the user, so the first boundary after a task is started is also
+      // the earliest — and the worst (BCC-3, measured). Naming open criteria
+      // there is naming evidence for work that does not exist yet. Wait until
+      // the session has edited something. `sourceEdits` rather than
+      // `pendingModifiedFiles`, which resets once notes are written and would
+      // silence the session that got furthest. It also spares the CLI
+      // subprocess below on every turn of a session that has changed nothing.
+      const project = findProject(ctx.cwd);
+      const session = project ? deriveSession(project.root, id) : null;
+      if (!session || session.sourceEdits === 0) {
+        clearFailure("acceptance steering", ctx, startedAt);
+        return;
+      }
       const active = await resolveActiveTask({ cwd: ctx.cwd });
       if (!("task" in active) || !active.task.acceptanceCriteria?.some((criterion) => !criterion.checked)) {
         clearFailure("acceptance steering", ctx, startedAt);
@@ -314,7 +328,12 @@ export default function backlogMdExtension(
             `Task ${active.task.id} has unchecked acceptance criteria. Name evidence and run backlog_check_ac for each open criterion before finishing it.`,
           ),
         ),
-        { deliverAs: "steer" },
+        // Not `steer`: OMP cancels in-flight tool calls to deliver one, and the
+        // model gets "Skipped due to pending system advisory" in place of the
+        // result it was waiting for. Measured cost was a research call thrown
+        // away mid-session. `nextTurn` queues the same text, like the guard
+        // warning above.
+        { deliverAs: "nextTurn" },
       );
       clearFailure("acceptance steering", ctx, startedAt);
     } catch (error) {

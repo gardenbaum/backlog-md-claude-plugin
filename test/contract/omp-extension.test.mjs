@@ -152,6 +152,9 @@ test("native Backlog tools are essential, inactive by default, and require accep
     const tool = pi.tools.get(name);
     assert.equal(tool.loadMode, "essential");
     assert.equal(tool.defaultInactive, true);
+    // Backlog.md locks a task per process, so a batch of them must not run at
+    // once (BCC-4). Reading alongside a write is fine.
+    assert.equal(tool.concurrency, name === "backlog_next" ? "shared" : "exclusive", name);
   }
   const check = pi.tools.get("backlog_check_ac");
   assert.equal(check.approval, "write");
@@ -180,14 +183,33 @@ test("an unchecked active task gets one end-of-turn steering message", async (t)
   backlogMdExtension(pi);
   const turn = { toolResults: [] };
   const ctx = context(project.root, "omp-steering");
+  appendEvent(project.root, "omp-steering", { t: "edit", p: "src/post.md" });
 
   await pi.events.get("turn_end")(turn, ctx);
   await pi.events.get("turn_end")(turn, ctx);
 
   assert.equal(pi.messages.length, 1);
   assert.match(pi.messages[0].message.content, new RegExp(id));
-  assert.deepEqual(pi.messages[0].options, { deliverAs: "steer" });
+  // `steer` here cancels whatever tool call is in flight (BCC-3).
+  assert.deepEqual(pi.messages[0].options, { deliverAs: "nextTurn" });
   assert.equal(deriveSession(project.root, "omp-steering").metrics.steeringMessages, 1);
+});
+
+// The turn boundary right after a task is started is a turn boundary like any
+// other, and it arrives before the work does (BCC-3).
+test("a task that has been started but not worked on yet is not steered", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const id = await project.createTask("Just started", ["--ac", "Criterion remains open"]);
+  await project.cli(["task", "edit", id, "-s", "In Progress"]);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+
+  await pi.events.get("turn_end")({ toolResults: [] }, context(project.root, "omp-unworked"));
+
+  assert.deepEqual(pi.messages, []);
+  assert.equal(deriveSession(project.root, "omp-unworked").metrics.steeringMessages, 0);
 });
 
 // The case the end-of-turn steering above cannot reach: no task was ever
@@ -312,6 +334,76 @@ test("native Backlog tools execute lifecycle mutations without a shell command",
     steeringMessages: 0,
     tasklessContinues: 0,
   });
+});
+
+// A decomposition is a dependency graph. Without these three the native path
+// could create the nodes and nothing else, while the contract rule forbids
+// reaching for a handwritten shell command instead (BCC-4).
+test("a created task can name its dependencies, milestone and parent", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-create-graph");
+  const first = await project.createTask("Comes first");
+  const second = await project.createTask("Comes second");
+  const parent = await project.createTask("Holds the work");
+  const create = (title, extra) =>
+    pi.tools
+      .get("backlog_task_create")
+      .execute(
+        "call-create",
+        { title, description: "Created with a graph around it.", acceptanceCriteria: ["It is recorded."], ...extra },
+        undefined,
+        undefined,
+        ctx,
+      );
+  // `dependencies` is absent from `task list --json`, and `-p` renumbers the id,
+  // so the title is the only stable handle back to the created task.
+  const read = async (title) => {
+    const listed = JSON.parse((await project.cli(["task", "list", "--json"])).stdout).tasks.find(
+      (candidate) => candidate.title === title,
+    );
+    return JSON.parse((await project.cli(["task", listed.id, "--json"])).stdout).task;
+  };
+
+  const graph = await create("Depends on both", { dependencies: [first, second], milestone: "First release" });
+  const child = await create("Belongs to a parent", { parent });
+
+  assert.equal(graph.isError, undefined, graph.content[0].text);
+  assert.equal(child.isError, undefined, child.content[0].text);
+  const created = await read("Depends on both");
+  assert.deepEqual([...created.dependencies].sort(), [first, second].sort());
+  assert.equal(created.milestone, "First release");
+  assert.equal((await read("Belongs to a parent")).parentTaskId, parent);
+});
+
+// Backlog.md itself sets Done whatever the criteria say, so this is the only
+// place the contract can hold (BCC-4).
+test("a task with an unchecked criterion cannot be finished", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-premature-finish");
+  const id = await project.createTask("Half done", ["--ac", "Checked later", "--ac", "Never checked"]);
+  await pi.tools
+    .get("backlog_check_ac")
+    .execute("c", { taskId: id, index: 1, evidence: "e" }, undefined, undefined, ctx);
+
+  const refused = await pi.tools
+    .get("backlog_task_finish")
+    .execute("call-finish", { taskId: id, summary: "Calling it done." }, undefined, undefined, ctx);
+
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /#2/);
+  assert.doesNotMatch(refused.content[0].text, /#1/, "a criterion with evidence is not part of the complaint");
+  assert.match(refused.content[0].text, /backlog_check_ac/);
+  const task = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task;
+  assert.notEqual(task.status, "Done");
+  assert.equal(task.finalSummary ?? "", "");
 });
 
 test("every file command has a native OMP registration", () => {

@@ -62,6 +62,15 @@ function taskTool({ name, label, description, parameters, execute }) {
     defaultInactive: true,
     loadMode: "essential",
     approval: name === "backlog_next" ? "read" : "write",
+    // Backlog.md locks a task per process. Seven `backlog_check_ac` calls issued
+    // as one batch left five of them with "is being modified by another
+    // process", and the retry re-checked what had already succeeded, doubling
+    // its evidence notes (BCC-4, measured and reproduced). `exclusive` is a full
+    // barrier in OMP's batch scheduler, so the calls queue behind each other
+    // instead. Not part of OMP's `ToolDefinition`, but `applyToolProxy` copies
+    // every own key onto the adapter the scheduler reads; a host that drops the
+    // field is back to today's behaviour rather than broken.
+    concurrency: name === "backlog_next" ? "shared" : "exclusive",
     execute: async (...args) => {
       const result = await execute(...args);
       if (!result.isError) {
@@ -179,9 +188,23 @@ export function registerBacklogTools(pi) {
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
         const id = requiredString(params, "taskId");
         const summary = requiredString(params, "summary");
-        return id && summary
-          ? mutate(["task", "edit", id, "-s", "Done", "--final-summary", summary], ctx)
-          : textResult("taskId and summary are required.", true);
+        if (!id || !summary) return textResult("taskId and summary are required.", true);
+        // Backlog.md sets Done whatever the criteria say — measured: a task went
+        // Done with both of its criteria still open (BCC-4). A criterion that
+        // cannot be met belongs corrected or removed, not carried into Done
+        // where the next reader has no way to tell it was never verified. A
+        // task this tool cannot read is not blocked: refusing on a failed read
+        // would put an unreachable CLI between the model and a finished task.
+        const view = await taskView(id, { cwd: ctx.cwd });
+        const open = view.ok ? (view.task.acceptanceCriteria || []).filter((criterion) => !criterion.checked) : [];
+        if (open.length > 0) {
+          return textResult(
+            `${id} still has unchecked acceptance criteria: ${open.map((criterion) => `#${criterion.index}`).join(", ")}. ` +
+              "Check each one with backlog_check_ac and named evidence, or edit the criterion if it is wrong, then finish.",
+            true,
+          );
+        }
+        return mutate(["task", "edit", id, "-s", "Done", "--final-summary", summary], ctx);
       },
     }),
   );
@@ -196,6 +219,17 @@ export function registerBacklogTools(pi) {
           title: { ...nonEmptyText, description: "Clear task title." },
           description: { ...nonEmptyText, description: "Outcome and context for the task." },
           acceptanceCriteria: { type: "array", minItems: 1, items: nonEmptyText },
+          // A decomposition is a dependency graph, and without these three the
+          // native path could only create the nodes (BCC-4). Optional, so the
+          // ordinary single-task call is unchanged.
+          dependencies: {
+            type: "array",
+            minItems: 1,
+            items: nonEmptyText,
+            description: "Task IDs this task depends on. They must already exist.",
+          },
+          milestone: { ...nonEmptyText, description: "Existing milestone ID or title." },
+          parent: { ...nonEmptyText, description: "Existing parent task ID, never a milestone ID." },
         },
         required: ["title", "description", "acceptanceCriteria"],
       },
@@ -205,19 +239,29 @@ export function registerBacklogTools(pi) {
         const criteria =
           Array.isArray(params?.acceptanceCriteria) &&
           params.acceptanceCriteria.every((criterion) => typeof criterion === "string" && criterion.trim());
-        return title && description && criteria
-          ? mutate(
-              [
-                "task",
-                "create",
-                title,
-                "-d",
-                description,
-                ...params.acceptanceCriteria.flatMap((criterion) => ["--ac", criterion]),
-              ],
-              ctx,
-            )
-          : textResult("title, description, and one or more acceptanceCriteria are required.", true);
+        if (!title || !description || !criteria) {
+          return textResult("title, description, and one or more acceptanceCriteria are required.", true);
+        }
+        const dependencies = Array.isArray(params?.dependencies) ? params.dependencies : [];
+        if (!dependencies.every((id) => typeof id === "string" && id.trim())) {
+          return textResult("Every dependency must be a non-empty task ID.", true);
+        }
+        const milestone = requiredString(params, "milestone");
+        const parent = requiredString(params, "parent");
+        return mutate(
+          [
+            "task",
+            "create",
+            title,
+            "-d",
+            description,
+            ...params.acceptanceCriteria.flatMap((criterion) => ["--ac", criterion]),
+            ...dependencies.flatMap((id) => ["--dep", id]),
+            ...(milestone ? ["-m", milestone] : []),
+            ...(parent ? ["-p", parent] : []),
+          ],
+          ctx,
+        );
       },
     }),
   );
