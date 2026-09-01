@@ -255,6 +255,22 @@ test("decompose creates through the native tool, with the CLI form as its fallba
   assert.match(text, /waits for nothing leaves `dependencies` out/);
 });
 
+// Both halves of one run: the session surveyed the backlog itself, dispatched
+// a scout agent of its own invention, then briefed the decomposer with the
+// answer and the acceptance criteria it wanted — one of which no measurement
+// could fail. Then it carried straight on into the implementation, so the task
+// was started after the work and never planned (BCC-7).
+test("decompose dispatches without a briefing and ends before the implementation", () => {
+  const text = read(join("commands", "decompose.md"));
+  assert.match(text, /verbatim and nothing else/);
+  assert.match(text, /Do not survey the backlog or the code first/);
+  assert.match(text, /do not tell it what to propose/);
+
+  const endsAt = text.indexOf("Creating them is where this command ends");
+  assert.ok(endsAt >= 0, "decompose.md never says where it ends");
+  assert.ok(text.slice(endsAt).includes("/backlog-md:start"), "the exit must name the command that implements");
+});
+
 // The review checkpoint: the gate sentence must precede the write it guards.
 test("verify's gate instructs asking and waiting before any criterion is checked", () => {
   const text = read(join("commands", "verify.md"));

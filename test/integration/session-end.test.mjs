@@ -243,6 +243,32 @@ test("an unresolvable task keeps the journal too", async (t) => {
   }
 });
 
+// The one session that leaked, and it was the well-behaved one: it finished
+// its task, so nothing was In Progress at shutdown, so the flush had no target
+// — and every later sweep found the same nothing. The journal outlived the
+// session for good, with the files it edited never reaching the task they
+// belong to (BCC-7).
+test("a session that finished its task writes to that task and lets the journal go", async (t) => {
+  if (!available) return t.skip("backlog CLI not installed");
+  const p = await makeProject();
+  try {
+    const id = await p.createTask("Finished before shutdown");
+    await p.cli(["task", "edit", id, "-s", "In Progress", "--modified-file", "src/existing.ts"]);
+    appendEvent(p.root, "s8", { t: "identity", id });
+    seedPending(p.root, "s8", ["src/post.md"]);
+    await p.cli(["task", "edit", id, "-s", "Done", "--final-summary", "Shipped."]);
+
+    const r = await flush(p.root, "s8");
+    assert.deepEqual(JSON.parse(r.stdout).files, ["src/post.md"], r.stdout);
+
+    const view = await taskView(id, { cwd: p.root, timeoutMs: 20000 });
+    assert.deepEqual(view.task.modifiedFiles, ["src/existing.ts", "src/post.md"]);
+    assert.equal(readJournal(p.root, "s8").length, 0, "a written pending list must not be kept");
+  } finally {
+    p.cleanup();
+  }
+});
+
 // The snapshot has no second chance to wait for: the session is over, and the
 // next one under this id writes its own at SessionStart.
 test("the snapshot goes even when the journal is kept", async (t) => {

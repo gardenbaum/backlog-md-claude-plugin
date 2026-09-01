@@ -9,6 +9,7 @@ import {
   debugLog,
   debugPath,
   deriveSession,
+  emptyMetrics,
   listSessions,
   listSessionSummaries,
   readCache,
@@ -495,9 +496,17 @@ export async function collectDoctor({ cwd = process.cwd(), sessionId, home } = {
   // crashed sessions would otherwise fill the report and hide every session
   // that ended properly.
   const recent = [...live, ...ended].sort((a, b) => b.at - a.at);
-  report.sessionMetrics = recent.slice(0, 5).map(({ sessionId: id, metrics }) => ({ sessionId: id, metrics }));
+  // Only the sessions that recorded something. A subagent is a session of its
+  // own and ends with every counter at zero, so one dispatch per turn is
+  // enough to push the session that did the work off a five-row report — three
+  // of the four summaries in the run that prompted this were empty (BCC-7).
+  report.sessionMetrics = recent
+    .filter(({ metrics }) => !emptyMetrics(metrics))
+    .slice(0, 5)
+    .map(({ sessionId: id, metrics }) => ({ sessionId: id, metrics }));
   // The stand-in for the hook check on a host that has no hooks: session state
-  // exists only because the extension wrote it.
+  // exists only because the extension wrote it — an empty session is still
+  // proof it ran, so this reads the unfiltered list.
   const newest = recent[0]?.at ?? 0;
   report.extension = { active: newest > 0, ageMs: newest > 0 ? Math.max(0, Date.now() - newest) : null };
 

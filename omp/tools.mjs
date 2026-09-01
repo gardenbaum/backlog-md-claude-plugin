@@ -1,6 +1,6 @@
 import { IN_PROGRESS } from "../lib/active-task.mjs";
 import { taskList, taskView } from "../lib/backlog.mjs";
-import { recordSessionMetric } from "../lib/integration.mjs";
+import { recordSessionMetric, recordTaskIdentity } from "../lib/integration.mjs";
 import { findNext } from "../lib/next.mjs";
 import { run } from "../lib/proc.mjs";
 import { renderNext } from "../lib/render.mjs";
@@ -44,8 +44,18 @@ async function startTask(id, ctx) {
   const before = await taskView(id, { cwd: ctx.cwd });
   const result = await mutate(["task", "edit", id, "-s", IN_PROGRESS], ctx);
   if (result.isError) return result;
+  // Named, not only counted. This was the one place the plugin could tell the
+  // plan was missing, and it recorded the number in silence: a session started
+  // a task, wrote a whole blog post, checked six criteria and finished, with
+  // `unplannedStarts: 1` the only trace that no plan was ever written (BCC-7).
+  const notes = [];
   if (!before.ok || !before.task.implementationPlan?.trim()) {
     recordSessionMetric({ cwd: ctx.cwd, sessionId: contextSessionId(ctx), name: "unplanned-start" });
+    notes.push(
+      `${id} has no implementation plan. Write one with backlog_task_plan before the work, not after: ` +
+        "the plan is what the next reader — and this session after a compaction — has instead of the " +
+        "reasoning that produced the code.",
+    );
   }
   // More than one task In Progress makes `resolveActiveTask` ambiguous, and
   // the brief, the acceptance reminder and the end-of-session note all go
@@ -55,15 +65,16 @@ async function startTask(id, ctx) {
   // being told is not.
   const listed = await taskList(["-s", IN_PROGRESS], { cwd: ctx.cwd });
   const others = listed.ok ? listed.tasks.filter((task) => task.id.toLowerCase() !== id.toLowerCase()) : [];
-  if (others.length === 0) return result;
-  return textResult(
-    `${result.content[0].text}\n\nAlso In Progress: ${others.map((task) => task.id).join(", ")}. ` +
-      "While more than one task is In Progress, this session cannot tell which one it is working on, and the " +
-      "task brief, the unchecked-criteria reminder and the end-of-session note stay silent until one is left. " +
-      "Finish or move the others back with backlog task edit <id> -s 'To Do' unless you meant to hold them all open.",
-    false,
-    result.details,
-  );
+  if (others.length > 0) {
+    notes.push(
+      `Also In Progress: ${others.map((task) => task.id).join(", ")}. ` +
+        "While more than one task is In Progress, this session cannot tell which one it is working on, and the " +
+        "task brief, the unchecked-criteria reminder and the end-of-session note stay silent until one is left. " +
+        "Finish or move the others back with backlog task edit <id> -s 'To Do' unless you meant to hold them all open.",
+    );
+  }
+  if (notes.length === 0) return result;
+  return textResult([result.content[0].text, ...notes].join("\n\n"), false, result.details);
 }
 
 function requiredString(params, name) {
@@ -93,9 +104,14 @@ function taskTool({ name, label, description, parameters, execute }) {
       const result = await execute(...args);
       if (!result.isError) {
         const ctx = args.at(-1);
-        recordSessionMetric({ cwd: ctx.cwd, sessionId: contextSessionId(ctx), name: "tool", tool: name });
+        const session = contextSessionId(ctx);
+        recordSessionMetric({ cwd: ctx.cwd, sessionId: session, name: "tool", tool: name });
+        // Which task this session is working on, from the call that names it.
+        // Without this the flush at shutdown has nothing to write to once the
+        // task has been finished, and the journal outlives the session (BCC-7).
+        recordTaskIdentity({ cwd: ctx.cwd, sessionId: session, taskId: args[1]?.taskId });
         if (name === "backlog_check_ac") {
-          recordSessionMetric({ cwd: ctx.cwd, sessionId: contextSessionId(ctx), name: "acceptance-check" });
+          recordSessionMetric({ cwd: ctx.cwd, sessionId: session, name: "acceptance-check" });
         }
       }
       return result;

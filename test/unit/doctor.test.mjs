@@ -97,6 +97,26 @@ test("Doctor renders recent per-session behavior counters", async () => {
   );
 });
 
+// Every subagent dispatch is a session of its own, and it ends with every
+// counter at zero. Four summaries, three of them empty, was one turn's worth in
+// the run that prompted this — enough to push the session that did the work off
+// a five-row report (BCC-7). The extension check still counts them: an empty
+// session is proof the extension ran.
+test("Doctor lists only the sessions that recorded something", async () => {
+  const root = projectDir();
+  appendEvent(root, "real-session", { t: "metric", name: "acceptance-check" });
+  for (const id of ["subagent-1", "subagent-2", "subagent-3"]) {
+    writeSessionSummary(root, id);
+  }
+
+  const report = await collectDoctor({ cwd: root, sessionId: "s" });
+  assert.deepEqual(
+    report.sessionMetrics.map((session) => session.sessionId),
+    ["real-session"],
+  );
+  assert.equal(report.extension.active, true, "an empty session still proves the extension ran");
+});
+
 test("Doctor reports counters for a session whose flush already removed its journal", async () => {
   const root = projectDir();
   appendEvent(root, "flushed-session", { t: "metric", name: "acceptance-check" });

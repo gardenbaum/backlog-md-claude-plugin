@@ -5,9 +5,14 @@ argument-hint: <idea>
 
 The idea is: `$ARGUMENTS`. If that is empty, ask what to decompose and stop.
 
-**Dispatch the `backlog-decomposer` agent** with the idea, and tell it the
-repository it is working in. It reads a lot of code, which is why it has its
-own context window.
+**Dispatch the `backlog-decomposer` agent** with the idea and the repository
+path, verbatim and nothing else. Do not survey the backlog or the code first,
+and do not tell it what to propose or how many tasks to return: finding
+duplicates and sizing the work are the first two things its own prompt has it
+do, and a briefing turns checkpoint 1 into a review of your own guess — one
+that dictated its acceptance criteria got back a criterion no measurement
+could fail. It reads a lot of code, which is why it has its own context
+window.
 
 **If the dispatch fails, retry it once and no more.** A host that has no
 subagents, or whose dispatch tool rejects the call twice, is not going to
@@ -53,6 +58,11 @@ Rules that matter for that form:
 - Same for `--dep`: a task with no predecessor is created without it.
 - Multi-line values: repeated `--append-*` flags, one invocation per line, is the recommended form. A real newline inside the quoted value works too. A literal `\n` does not — it is stored as text.
 - Single-quote any value containing backticks. Inside double quotes they are command substitution, and the original text cannot be recovered afterwards.
+
+**Creating them is where this command ends.** Implementation starts with
+`/backlog-md:start <id>`, which checks what is already active, reads the brief
+and asks for a plan before any code. A session that slides from creating a task
+straight into doing it starts it after the fact, and the plan is never written.
 
 <!-- 22.08.26 claude (BCC-44): no draft mode here, decided rather than
      overlooked. Backlog.md drafts fit unripe scope, but a draft cannot be

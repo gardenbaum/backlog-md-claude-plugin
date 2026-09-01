@@ -300,6 +300,7 @@ test("native Backlog tools execute lifecycle mutations without a shell command",
     .get("backlog_task_start")
     .execute("call-start", { taskId: id }, undefined, undefined, ctx);
   assert.equal(start.isError, undefined, start.content[0].text);
+  assert.match(start.content[0].text, /no implementation plan/i, "starting without a plan must say so");
   const plan = await pi.tools
     .get("backlog_task_plan")
     .execute("call-plan", { taskId: id, steps: ["Run the focused contract test."] }, undefined, undefined, ctx);
@@ -319,6 +320,9 @@ test("native Backlog tools execute lifecycle mutations without a shell command",
   assert.match(task.implementationNotes, /native tool contract test/);
   assert.match(task.implementationPlan, /Run the focused contract test/);
   assert.match(task.finalSummary, /Completed through native tools/);
+  // The tool calls that name a task are what tells the end-of-session flush
+  // which one this session worked on, long after it went Done (BCC-7).
+  assert.equal(deriveSession(project.root, "omp-native-lifecycle").taskId, id);
   assert.deepEqual(deriveSession(project.root, "omp-native-lifecycle").metrics, {
     guards: 0,
     toolCalls: {
@@ -334,6 +338,32 @@ test("native Backlog tools execute lifecycle mutations without a shell command",
     steeringMessages: 0,
     tasklessContinues: 0,
   });
+});
+
+// The plugin knew and said nothing: a run started a task, wrote a whole post,
+// checked six criteria and finished, and `unplannedStarts: 1` in a state file
+// nobody reads was the only trace that no plan was ever written (BCC-7).
+test("starting a planned task adds no warning, starting an unplanned one names the plan", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-unplanned-start");
+  const id = await project.createTask("Start me");
+
+  const bare = await pi.tools.get("backlog_task_start").execute("call-1", { taskId: id }, undefined, undefined, ctx);
+  assert.equal(bare.isError, undefined, bare.content[0].text);
+  assert.match(bare.content[0].text, new RegExp(`${id} has no implementation plan`));
+  assert.match(bare.content[0].text, /backlog_task_plan before the work/);
+
+  await pi.tools
+    .get("backlog_task_plan")
+    .execute("call-2", { taskId: id, steps: ["Read the code."] }, undefined, undefined, ctx);
+  const planned = await pi.tools.get("backlog_task_start").execute("call-3", { taskId: id }, undefined, undefined, ctx);
+  assert.equal(planned.isError, undefined, planned.content[0].text);
+  assert.doesNotMatch(planned.content[0].text, /implementation plan/i, "a planned start must stay quiet");
+  assert.equal(deriveSession(project.root, "omp-unplanned-start").metrics.unplannedStarts, 1);
 });
 
 // A decomposition is a dependency graph. Without these three the native path
