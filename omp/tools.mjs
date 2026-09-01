@@ -1,4 +1,5 @@
-import { taskView } from "../lib/backlog.mjs";
+import { IN_PROGRESS } from "../lib/active-task.mjs";
+import { taskList, taskView } from "../lib/backlog.mjs";
 import { recordSessionMetric } from "../lib/integration.mjs";
 import { findNext } from "../lib/next.mjs";
 import { run } from "../lib/proc.mjs";
@@ -41,11 +42,28 @@ function contextSessionId(ctx) {
 
 async function startTask(id, ctx) {
   const before = await taskView(id, { cwd: ctx.cwd });
-  const result = await mutate(["task", "edit", id, "-s", "In Progress"], ctx);
-  if (!result.isError && (!before.ok || !before.task.implementationPlan?.trim())) {
+  const result = await mutate(["task", "edit", id, "-s", IN_PROGRESS], ctx);
+  if (result.isError) return result;
+  if (!before.ok || !before.task.implementationPlan?.trim()) {
     recordSessionMetric({ cwd: ctx.cwd, sessionId: contextSessionId(ctx), name: "unplanned-start" });
   }
-  return result;
+  // More than one task In Progress makes `resolveActiveTask` ambiguous, and
+  // the brief, the acceptance reminder and the end-of-session note all go
+  // quiet together. A session started thirteen at once and left the first one
+  // open with four unchecked criteria, unnoticed (BCC-5). Named, not refused:
+  // working on several tasks is legitimate, losing the safety net without
+  // being told is not.
+  const listed = await taskList(["-s", IN_PROGRESS], { cwd: ctx.cwd });
+  const others = listed.ok ? listed.tasks.filter((task) => task.id.toLowerCase() !== id.toLowerCase()) : [];
+  if (others.length === 0) return result;
+  return textResult(
+    `${result.content[0].text}\n\nAlso In Progress: ${others.map((task) => task.id).join(", ")}. ` +
+      "While more than one task is In Progress, this session cannot tell which one it is working on, and the " +
+      "task brief, the unchecked-criteria reminder and the end-of-session note stay silent until one is left. " +
+      "Finish or move the others back with backlog task edit <id> -s 'To Do' unless you meant to hold them all open.",
+    false,
+    result.details,
+  );
 }
 
 function requiredString(params, name) {
@@ -200,7 +218,9 @@ export function registerBacklogTools(pi) {
         if (open.length > 0) {
           return textResult(
             `${id} still has unchecked acceptance criteria: ${open.map((criterion) => `#${criterion.index}`).join(", ")}. ` +
-              "Check each one with backlog_check_ac and named evidence, or edit the criterion if it is wrong, then finish.",
+              "Check each one with backlog_check_ac and evidence you actually gathered. A criterion you cannot " +
+              "verify belongs removed with backlog task edit <id> --remove-ac <n>, or rewritten into one you can: " +
+              "checking it with an excuse for evidence records it as verified when it was not.",
             true,
           );
         }

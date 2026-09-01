@@ -379,6 +379,32 @@ test("a created task can name its dependencies, milestone and parent", async (t)
   assert.equal((await read("Belongs to a parent")).parentTaskId, parent);
 });
 
+// More than one task In Progress makes `resolveActiveTask` ambiguous, and the
+// brief, the acceptance reminder and the end-of-session note go silent
+// together. A session started thirteen at once and left the first one open
+// with four unchecked criteria, unnoticed (BCC-5).
+test("starting a task while another is In Progress names the others", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-parallel-start");
+  const first = await project.createTask("Already running");
+  const second = await project.createTask("Started next");
+  const start = (id) =>
+    pi.tools.get("backlog_task_start").execute("call-start", { taskId: id }, undefined, undefined, ctx);
+
+  const one = await start(first);
+  const two = await start(second);
+
+  assert.equal(one.isError, undefined, one.content[0].text);
+  assert.doesNotMatch(one.content[0].text, /Also In Progress/, "the only task in the column warns about nothing");
+  assert.equal(two.isError, undefined, two.content[0].text);
+  assert.match(two.content[0].text, new RegExp(`Also In Progress: ${first}\\b`));
+  assert.match(two.content[0].text, /-s 'To Do'/, "the way back is named, since no native tool covers it");
+});
+
 // Backlog.md itself sets Done whatever the criteria say, so this is the only
 // place the contract can hold (BCC-4).
 test("a task with an unchecked criterion cannot be finished", async (t) => {
@@ -401,6 +427,10 @@ test("a task with an unchecked criterion cannot be finished", async (t) => {
   assert.match(refused.content[0].text, /#2/);
   assert.doesNotMatch(refused.content[0].text, /#1/, "a criterion with evidence is not part of the complaint");
   assert.match(refused.content[0].text, /backlog_check_ac/);
+  // Eleven criteria were checked with "deferred to a later task" as their
+  // evidence once this refusal existed: the cheapest exit has to be the honest
+  // one (BCC-5).
+  assert.match(refused.content[0].text, /--remove-ac/, "a criterion that cannot be verified has a way out");
   const task = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task;
   assert.notEqual(task.status, "Done");
   assert.equal(task.finalSummary ?? "", "");

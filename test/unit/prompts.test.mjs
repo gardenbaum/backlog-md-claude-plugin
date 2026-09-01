@@ -231,6 +231,21 @@ test("every command that dispatches an agent bounds the retries and falls back i
   }
 });
 
+// `backlog_task_create` has taken dependencies since 0.3.4, but the template
+// still taught the CLI form; the quoting rule then redirected the model to the
+// native tools and the graph fell out on the way. Thirteen tasks were created
+// with the dependencies described in prose and recorded nowhere (BCC-5).
+test("decompose creates through the native tool, with the CLI form as its fallback", () => {
+  const text = read(join("commands", "decompose.md"));
+  const nativeAt = text.indexOf("backlog_task_create");
+  const cliAt = text.indexOf("backlog task create");
+  assert.ok(nativeAt >= 0, "decompose.md never names backlog_task_create");
+  assert.ok(cliAt < 0 || nativeAt < cliAt, "the CLI form must follow the native tool, as its fallback");
+  for (const parameter of ["`dependencies`", "`milestone`", "`parent`"]) {
+    assert.ok(text.includes(parameter), `decompose.md never names ${parameter}`);
+  }
+});
+
 // The review checkpoint: the gate sentence must precede the write it guards.
 test("verify's gate instructs asking and waiting before any criterion is checked", () => {
   const text = read(join("commands", "verify.md"));

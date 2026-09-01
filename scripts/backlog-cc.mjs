@@ -938,8 +938,12 @@ async function main() {
     return;
   }
 
+  // The hint comes last on purpose. A host that shows only the tail of a long
+  // output — eleven of these from one loop is 84 lines — hid it behind the
+  // usage line, leaving the model with the one line that names no way forward
+  // (BCC-5).
   process.stderr.write(
-    `unknown command: ${command}${backlogCliHint(process.argv.slice(2))}\nusage: backlog-cc [doctor|setup|active|active-id|brief [id]|next [limit]|install-hooks [--shared] [--force]|check-staged|check-tasks|sweep <session-id> [--include-self]|flush <session-id>]\n`,
+    `unknown command: ${command}\nusage: backlog-cc [doctor|setup|active|active-id|brief [id]|next [limit]|install-hooks [--shared] [--force]|check-staged|check-tasks|sweep <session-id> [--include-self]|flush <session-id>]\n${backlogCliHint(process.argv.slice(2))}`,
   );
 }
 

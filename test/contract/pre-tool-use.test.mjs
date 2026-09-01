@@ -82,6 +82,43 @@ test("editing a source file is not the guard's business", async () => {
   assert.equal(r.stdout.trim(), "", "no decision at all, not an explicit allow");
 });
 
+// `backlog decision create` writes a template and no CLI command fills it in,
+// so denying the hand-edit made decision records permanently empty — measured:
+// a session was refused the write and its audit result exists nowhere (BCC-5).
+test("a decision record that already exists may be written by hand", async () => {
+  const root = project();
+  const file = join(root, "backlog", "decisions", "decision-1 - Image naming.md");
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, "---\nid: decision-1\n---\n\n## Context\n");
+
+  const r = await feed(
+    { session_id: "s5", cwd: root, tool_name: "Write", tool_input: { file_path: file, content: "filled in" } },
+    root,
+  );
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout.trim(), "", "the only way to fill in a decision must not be blocked");
+});
+
+test("a decision file that does not exist yet is denied, and points at 'decision create'", async () => {
+  const root = project();
+  const r = await feed(
+    {
+      session_id: "s6",
+      cwd: root,
+      tool_name: "Write",
+      tool_input: {
+        file_path: join(root, "backlog", "decisions", "decision-9 - Written by hand.md"),
+        content: "## Context\n",
+      },
+    },
+    root,
+  );
+  assert.equal(r.code, 0);
+  const output = parseHookOutput(r, "PreToolUse").hookSpecificOutput;
+  assert.equal(output.permissionDecision, "deny");
+  assert.match(output.permissionDecisionReason, /backlog decision create/);
+});
+
 test("BACKLOG_MD_GUARD=0 turns the deny into a warning", async () => {
   const root = project();
   const r = await feed(editTask(root), root, "BACKLOG_MD_GUARD=0");

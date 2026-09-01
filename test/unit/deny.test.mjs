@@ -126,10 +126,15 @@ test("a document points at 'doc update', never at task edit", () => {
   assertPasteable(reason);
 });
 
-test("a decision names no editing command at all, because none exists in the CLI", () => {
+// Reached only for a decision file that does not exist yet: the guard lets a
+// hand-edit of an existing one through, because the CLI has no command that
+// fills in the template `decision create` writes (BCC-5).
+test("a decision points at 'decision create', and still invents no edit command", () => {
   const reason = denyReason({ managed: true, kind: "decision", taskId: "D-1" }, {});
-  assert.ok(!reason.includes("Use instead:"), "no edit/update command exists for a decision — none should be invented");
+  assert.match(reason, /backlog decision create/);
   assert.ok(!/backlog decision (edit|update)/.test(reason));
+  assert.match(reason, /editing that file afterwards is allowed/i);
+  assertPasteable(reason);
 });
 
 // Every command line under "Use instead:" must be something an agent can

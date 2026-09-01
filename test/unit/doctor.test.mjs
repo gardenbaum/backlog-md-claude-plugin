@@ -708,6 +708,20 @@ test("a Backlog.md command sent to backlog-cc names the CLI that owns it", () =>
   assert.match(backlogCliHint(["instructions", "overview"]), /backlog instructions overview/);
 });
 
+// Order, not presence: a host that shows only the tail of a long output hid
+// the hint behind the usage line, and the same wrong invocation came back
+// (BCC-5). Spawned rather than unit-called, because the order lives in the
+// stderr write, not in `backlogCliHint`.
+test("the CLI hint is the last thing an unknown command prints", async () => {
+  const r = await run(process.execPath, [join(PLUGIN_ROOT, "scripts", "backlog-cc.mjs"), "task", "list", "--plain"]);
+  const output = r.stdout + r.stderr;
+  assert.match(output, /backlog task list --plain/);
+  assert.ok(
+    output.indexOf("usage: backlog-cc") < output.indexOf("not the Backlog.md CLI"),
+    `the hint must survive a tail-truncated output:\n${output}`,
+  );
+});
+
 test("backlog-cc's own commands and unrelated typos get no CLI hint", () => {
   for (const args of [["doctor"], ["brief", "BCC-1"], ["bogus"], []]) {
     assert.equal(backlogCliHint(args), "", args.join(" "));

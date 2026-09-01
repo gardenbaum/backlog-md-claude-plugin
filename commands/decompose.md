@@ -22,24 +22,33 @@ as a short list: title, one line of intent, the acceptance criteria count, and
 the milestone if it named one. Show the duplicates it found first if there are
 any; an idea that is already tracked ends here.
 
-**Wait for approval.** Then create only what was approved, one command per
-task, in dependency order so `--dep` can name real ids:
+**Wait for approval.** Then create only what was approved, one call per task,
+in dependency order so every dependency names an id that already exists:
+
+- `backlog_task_create` takes `title`, `description`, `acceptanceCriteria` and
+  `dependencies` — the ids this task waits for. A decomposition is a
+  dependency graph; created without them it is a list, and nothing downstream
+  can tell what is ready.
+- `milestone` only when the proposal named one. `parent` only for a subtask,
+  and never a milestone id.
+- Create parents before children, and dependencies before dependents.
+- Report the ids that were created. If one call fails, stop and report rather
+  than continuing: half a decomposition with broken dependencies is worse than
+  none.
+
+**Only if the native tools are absent here**, the same graph through the CLI,
+one command per task:
 
 ```bash
 backlog task create 'Title' -d 'Description' --ac 'First criterion' --ac 'Second criterion' --dep TASK-4 -m 'Milestone title'
 ```
 
-Rules that matter here:
+Rules that matter for that form:
 
 - Add `-m 'Milestone title'` only when the proposal named one; leave it off
   otherwise. `-m`/`--milestone` assigns by existing milestone id or title.
 - Multi-line values: repeated `--append-*` flags, one invocation per line, is the recommended form. A real newline inside the quoted value works too. A literal `\n` does not — it is stored as text.
 - Single-quote any value containing backticks. Inside double quotes they are command substitution, and the original text cannot be recovered afterwards.
-- Create parents before children, and dependencies before dependents — `--dep`
-  needs an id that exists.
-- Report the ids that were created. If one command fails, stop and report
-  rather than continuing: half a decomposition with broken dependencies is
-  worse than none.
 
 <!-- 22.08.26 claude (BCC-44): no draft mode here, decided rather than
      overlooked. Backlog.md drafts fit unripe scope, but a draft cannot be
