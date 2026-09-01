@@ -22,6 +22,48 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.5 — 2026-09-01
+
+Six defects from a third OMP session on the same host model. All of them cost
+the session something it had already done: an audit task left open forever, a
+decision record that can never be filled in, a dependency graph described in
+prose and recorded nowhere.
+
+- A hand-edit of an existing decision record passes the guard. `backlog
+  decision create` writes a template and the CLI has no command that fills one
+  in, so the deny was a dead end by construction — measured: a session created
+  `decision-1`, was refused the write, decided out loud that the write had
+  succeeded, and its audit result exists nowhere. Creating a decision file by
+  hand is still refused, and now names `backlog decision create`, which is the
+  one part of a decision the CLI does own: its id and filename.
+- `backlog_task_start` names the tasks already In Progress. More than one makes
+  `resolveActiveTask` ambiguous, and the brief, the acceptance reminder and the
+  end-of-session note all go quiet together — a session started thirteen tasks
+  at once and never noticed the first one still had four unchecked criteria.
+  Named, not refused: parallel work is legitimate, losing the safety net
+  without being told is not. The message also names `backlog task edit <id> -s
+  'To Do'`, since no native tool moves a status back.
+- `/backlog-md:decompose` creates through `backlog_task_create` and its
+  `dependencies`, `milestone` and `parent` parameters. They have existed since
+  0.3.4, but the template still taught the shell form; the quoting rule then
+  redirected the model to the native tools and the graph fell out on the way.
+  Thirteen tasks were created with their dependencies stated in the summary
+  table and recorded on no task. The CLI form stays as the fallback for a host
+  without the tools.
+- The always-applied contract rule names `backlog task edit <id> -s '<status>'`
+  for a status change no tool covers. The rule reads as "never the CLI", and a
+  model that wanted eleven tasks back in To Do reached twice for `backlog-cc`,
+  got nothing that could do it, and left them all In Progress. Still under the
+  1000-byte ceiling, at 978.
+- `backlog-cc` prints its correction after the usage line. A loop of eleven
+  wrong invocations produced 84 lines, and the host showed the tail: the one
+  line naming the command to run instead was the one scrolled away.
+- The `backlog_task_finish` refusal names `--remove-ac`. Introduced in 0.3.4,
+  it made a fabricated evidence line the cheapest way past — eleven criteria
+  were checked with "deferred to a later task" as their proof. A criterion that
+  cannot be verified here belongs removed or rewritten, and the refusal now
+  says so.
+
 ## 0.3.4 — 2026-09-01
 
 Four defects from one further OMP session on the same host model, all in the
