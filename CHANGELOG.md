@@ -22,6 +22,34 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.3 — 2026-09-01
+
+Three defects measured in one OMP session on a smaller host model, fixed
+independently.
+
+- Every command that dispatches an agent now bounds the retries and names an
+  inline fallback. `/backlog-md:decompose` said only "dispatch the
+  `backlog-decomposer` agent"; a host whose dispatch tool rejected the call
+  left the model with no next step, and it repeated the same rejected call ten
+  times without ever producing a decomposition. `decompose`, `plan` and
+  `verify` now say: retry once, then read the agent's own prompt file under
+  `${CLAUDE_PLUGIN_ROOT}/agents/` and do that work in the session, reporting
+  that the agent was unavailable. `finish` inherits it through `verify`'s
+  flow. Verify's approval gates are restated as applying to a table the main
+  agent wrote itself.
+- `backlog-cc` recognises the Backlog.md CLI's own commands. An agent that
+  meets the wrapper in a command template reads it as "the way to call
+  Backlog.md here" and addresses it with `task list` or `instructions
+  overview`; the usage line it got back named neither the real CLI nor a
+  command to run, so the guess was simply repeated. The reply now names the
+  `backlog` invocation to run instead, quoted so it is runnable as printed.
+- The build-intent heuristic covers German. It was English-only, so a German
+  request with no active task produced silence — no nudge, and no task
+  created at all. The pattern uses letter lookarounds rather than `\b`, which
+  is ASCII-only and refuses to open a match on `ändere`, and explicit
+  inflection endings rather than `\w*`, so the stem `bau` does not fire on
+  `Baum`.
+
 ## 0.3.2 — 2026-08-31
 
 - `backlog init` is refused when the directory already belongs to a Backlog.md
