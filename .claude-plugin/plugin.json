@@ -1,7 +1,7 @@
 {
   "name": "backlog-md",
   "description": "Backlog.md integration: injects the active task at session start and across compaction, observes session activity, flushes edited files to the task on session end, and redirects hand-edits of Backlog.md files to the CLI that owns them.",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "license": "MIT",
   "keywords": ["backlog", "task-management", "agent-workflow"],
   "author": { "name": "Fabian Baumgartner" },

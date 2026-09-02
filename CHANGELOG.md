@@ -22,6 +22,41 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.9 — 2026-09-02
+
+The run where every fix from 0.3.8 held and a checkbox still lied. The third
+`/backlog-md:decompose` in the same repository planned before it worked, wrote
+one evidence block per criterion, and left no counter against a bystander — and
+then ticked a criterion reading "3-5 inhaltliche Hauptabschnitte" over a post
+with six sections, counting the six in its own evidence.
+
+- `backlog_check_ac` answers with the criterion it just checked and the
+  `--uncheck-ac` that undoes it. "Updated task EDG-1" was the whole reply to
+  all nine ticks of that run, so the claim and the criterion it was measured
+  against were never in the same place — for the model or for the reader.
+- `backlog_task_create` names the criteria that carry more than one assertion,
+  in the reply to the call that writes them. The decomposer prompt has asked
+  for one assertion each since 0.3.8; the run that had it returned six compound
+  criteria out of nine, one asserting that a title image "liegt unter
+  public/images/posts/" while excusing its absence in the same sentence.
+- Checkpoint 1 in `/backlog-md:decompose` shows the acceptance criteria
+  themselves for a proposal of three tasks or fewer, not how many there are.
+  The count is what the user approved before the criterion that could not fail
+  was written into the task.
+- `/backlog-md:decompose` names the commands that must not run before the
+  dispatch — `ls`, `find`, `grep`, `backlog task list`. "Do not survey the
+  backlog or the code first" was already in the file for the run that opened
+  with ten orientation commands and then briefed the agent with the schema
+  fields, and got back a criterion that was a checklist of exactly those.
+- `backlog_task_finish` records the files the session edited with
+  `--modified-file`. The journal has held them all along and the flag has been
+  in the CLI all along; a finished task named the one file it changed inside a
+  prose sentence of evidence and nowhere a reader can list.
+- A notes event now clears the session's pending files, which is what the
+  turn_end guard's comment has claimed since the journal replaced the snapshot.
+  The fold never did it, so the first task finished in a session would have
+  handed its files to the second.
+
 ## 0.3.8 — 2026-09-02
 
 The second clean run, and what it recorded wrongly. A `/backlog-md:decompose`
