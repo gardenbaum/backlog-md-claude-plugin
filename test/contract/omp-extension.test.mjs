@@ -366,6 +366,32 @@ test("starting a planned task adds no warning, starting an unplanned one names t
   assert.equal(deriveSession(project.root, "omp-unplanned-start").metrics.unplannedStarts, 1);
 });
 
+// A run measured twice, corrected itself, and left both readings in the task:
+// "description=304 characters — violates the 1–300 limit" and, three
+// paragraphs later, "245 characters (OK)" (BCC-8, edgemaker).
+test("re-checking a criterion replaces its evidence instead of stacking a second one", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-evidence");
+  const id = await project.createTask("Measured twice", ["--ac", "The count is right", "--ac", "The file is there"]);
+  const check = (call, index, evidence) =>
+    pi.tools.get("backlog_check_ac").execute(call, { taskId: id, index, evidence }, undefined, undefined, ctx);
+
+  assert.equal((await check("call-1", 1, "counted 304 characters, over the limit")).isError, undefined);
+  assert.equal((await check("call-2", 2, "the file is on disk")).isError, undefined);
+  const corrected = await check("call-3", 1, "measured again with awk: 245 characters, inside the limit");
+  assert.equal(corrected.isError, undefined, corrected.content[0].text);
+
+  const notes = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task.implementationNotes;
+  assert.match(notes, /245 characters, inside the limit/);
+  assert.doesNotMatch(notes, /304 characters/, "the correction has to replace what it corrects");
+  assert.equal(notes.split("Evidence for acceptance criterion #1: ").length - 1, 1, "one block per criterion");
+  assert.match(notes, /Evidence for acceptance criterion #2: the file is on disk/, "other criteria are untouched");
+});
+
 // A decomposition is a dependency graph. Without these three the native path
 // could create the nodes and nothing else, while the contract rule forbids
 // reaching for a handwritten shell command instead (BCC-4).
@@ -960,6 +986,9 @@ test("OMP shutdown freezes the session counters before the worker that deletes t
   const active = await project.createTask("OMP unfinished task");
   const started = await project.cli(["task", "edit", active, "-s", "In Progress"]);
   assert.equal(started.ok, true, started.stderr || started.stdout);
+  // The session has to be the one that worked on it; a bystander's shutdown
+  // has its own test below.
+  appendEvent(project.root, "omp-summary", { t: "identity", id: active });
 
   const pi = mockExtensionApi();
   backlogMdExtension(pi);
@@ -978,6 +1007,33 @@ test("OMP shutdown freezes the session counters before the worker that deletes t
   const [summary] = listSessionSummaries(project.root);
   assert.equal(summary?.sessionId, "omp-summary");
   assert.equal(summary.metrics.unfinishedSessions, 1);
+});
+
+// A sibling session shut down one minute before the session doing the work
+// finished its task, and counted the project's state against itself:
+// `unfinishedSessions: 1` beside an empty `toolCalls` (BCC-8, edgemaker).
+test("a session that never touched the open task is not counted as unfinished", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const active = await project.createTask("Someone else's task");
+  const started = await project.cli(["task", "edit", active, "-s", "In Progress"]);
+  assert.equal(started.ok, true, started.stderr || started.stdout);
+
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const previousNode = process.env.BACKLOG_MD_NODE;
+  process.env.BACKLOG_MD_NODE = join(project.root, "missing-node");
+  try {
+    await pi.events.get("session_shutdown")({}, context(project.root, "omp-bystander"));
+  } finally {
+    if (previousNode === undefined) delete process.env.BACKLOG_MD_NODE;
+    else process.env.BACKLOG_MD_NODE = previousNode;
+  }
+
+  const [summary] = listSessionSummaries(project.root);
+  assert.equal(summary?.sessionId, "omp-bystander");
+  assert.equal(summary.metrics.unfinishedSessions, 0, "a session that recorded nothing left nothing unfinished");
 });
 
 // The summary write used to report through the flush worker's callback, and a

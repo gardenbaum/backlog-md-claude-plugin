@@ -40,6 +40,41 @@ function contextSessionId(ctx) {
   }
 }
 
+/**
+ * The notes with this criterion's evidence replaced, or null to append.
+ *
+ * A re-check corrects the check before it — the executor measured again, or
+ * the first evidence was wrong. Appending left both readings in the task: one
+ * run recorded "description=304 characters — violates the 1–300 limit" and,
+ * three paragraphs later, "245 characters (OK)", with nothing to say which one
+ * counts (BCC-8, measured in edgemaker). The evidence line is written here, so
+ * its paragraph is ours to find and ours to overwrite.
+ *
+ * @param {string} notes
+ * @param {number} index
+ * @param {string} line
+ * @returns {string | null}
+ */
+function replaceEvidence(notes, index, line) {
+  const prefix = evidencePrefix(index);
+  const paragraphs = String(notes || "").split(/\n[ \t]*\n/);
+  if (!paragraphs.some((paragraph) => paragraph.startsWith(prefix))) return null;
+  let written = false;
+  return paragraphs
+    .filter((paragraph) => {
+      if (!paragraph.startsWith(prefix)) return true;
+      if (written) return false;
+      written = true;
+      return true;
+    })
+    .map((paragraph) => (paragraph.startsWith(prefix) ? line : paragraph))
+    .join("\n\n");
+}
+
+function evidencePrefix(index) {
+  return `Evidence for acceptance criterion #${index}: `;
+}
+
 async function startTask(id, ctx) {
   const before = await taskView(id, { cwd: ctx.cwd });
   const result = await mutate(["task", "edit", id, "-s", IN_PROGRESS], ctx);
@@ -189,20 +224,27 @@ export function registerBacklogTools(pi) {
         const id = requiredString(params, "taskId");
         const evidence = requiredString(params, "evidence");
         const index = Number.isInteger(params?.index) && params.index > 0 ? params.index : null;
-        return id && index && evidence
-          ? mutate(
-              [
-                "task",
-                "edit",
-                id,
-                "--append-notes",
-                `Evidence for acceptance criterion #${index}: ${evidence}`,
-                "--check-ac",
-                String(index),
-              ],
-              ctx,
-            )
-          : textResult("taskId, a positive index, and named evidence are required.", true);
+        if (!id || !index || !evidence) {
+          return textResult("taskId, a positive index, and named evidence are required.", true);
+        }
+        // One paragraph, always: a blank line inside the evidence would split
+        // the block that `replaceEvidence` has to find again on a re-check.
+        const line = evidencePrefix(index) + evidence.trim().replace(/\n[ \t]*\n+/g, "\n");
+        const before = await taskView(id, { cwd: ctx.cwd });
+        // A failed read appends. Losing the check to a lookup that did not
+        // answer would be the worse half of the trade.
+        const replaced = before.ok ? replaceEvidence(before.task.implementationNotes, index, line) : null;
+        return mutate(
+          [
+            "task",
+            "edit",
+            id,
+            ...(replaced === null ? ["--append-notes", line] : ["--notes", replaced]),
+            "--check-ac",
+            String(index),
+          ],
+          ctx,
+        );
       },
     }),
   );

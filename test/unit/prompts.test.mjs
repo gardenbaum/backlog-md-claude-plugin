@@ -39,8 +39,18 @@ test("OMP rules separate always-applied task ownership from CLI quoting guidance
   assert.match(contract.body, /refuses the call[\s\S]*`backlog` CLI/);
 
   const quoting = frontmatter(read(join("rules", "backlog-md-quoting.md")));
-  assert.match(quoting.fields.condition, /backlog task \(edit\|create\).*--append-/);
+  assert.match(quoting.fields.condition, /backlog task edit.*backlog task create.*--append-/);
   for (const rule of QUOTING_RULES) assert.ok(quoting.body.includes(rule), `missing rule: ${rule}`);
+
+  // The contract is always applied, so a condition it satisfies itself makes
+  // the quoting rule announce itself in runs that write no command at all. It
+  // did: the placeholder in "backlog task edit <id> -s" matched (BCC-8).
+  const condition = new RegExp(quoting.fields.condition.replace(/^"|"$/g, ""));
+  assert.doesNotMatch(contract.body, condition, "the contract triggers the quoting rule");
+  // Still fires on the real thing.
+  for (const command of ["backlog task edit BCC-1 --check-ac 1", "backlog task create 'Title' --ac 'One'"]) {
+    assert.match(command, condition, `condition no longer matches: ${command}`);
+  }
 });
 
 // alwaysApply carries this file into every prompt of every project, including
@@ -127,6 +137,15 @@ test("every agent is told in prose that it must not mutate the backlog", () => {
       `${name}: no explicit no-mutation clause`,
     );
   }
+});
+
+// "One per line, each independently checkable" was satisfied by a criterion
+// carrying eight requirements on one line — one checkbox that could not record
+// that six of them held, and evidence that ran to a paragraph (BCC-8).
+test("the decomposer is told one assertion per criterion, not one line per criterion", () => {
+  const body = frontmatter(read(agentPath("backlog-decomposer"))).body.replace(/\s+/g, " ");
+  assert.match(body, /One assertion each/i);
+  assert.match(body, /needs an "and" is two criteria/i);
 });
 
 const COMMANDS = ["doctor", "next", "start", "decompose", "plan", "verify", "finish", "setup"];
@@ -222,12 +241,22 @@ test("commands dispatch only agents this plugin ships", () => {
 // same call ten times and never produced a decomposition (BCC-2). Each command
 // that dispatches an agent therefore has to bound the retries and name the
 // inline fallback, which is the agent's own prompt file.
+// "Retry once and no more" was written for a host with no subagents, and read
+// as a ceiling on every kind of failure: one host rejected the dispatch three
+// times over the shape of the arguments and took the fourth, which the rule
+// would have abandoned after the second for nothing (BCC-8).
 test("every command that dispatches an agent bounds the retries and falls back inline", () => {
   for (const name of COMMANDS) {
     const text = read(join("commands", `${name}.md`));
     const dispatched = [...text.matchAll(/\*\*Dispatch the `(backlog-[a-z0-9-]+)` agent\*\*/g)].map((m) => m[1]);
+    const flat = text.replace(/\s+/g, " ");
     for (const agent of dispatched) {
-      assert.match(text, /retry it once and no more/i, `${name}: dispatches ${agent} with no retry ceiling`);
+      assert.match(flat, /the same rejection twice ends it/i, `${name}: dispatches ${agent} with no retry ceiling`);
+      assert.match(
+        flat,
+        /names what the call is missing.*fix it and send it again/i,
+        `${name}: a rejected call shape must be fixed and resent, not counted against the ceiling`,
+      );
       assert.ok(
         text.includes(`\${CLAUDE_PLUGIN_ROOT}/agents/${agent}.md`),
         `${name}: no inline fallback pointing at ${agent}.md`,

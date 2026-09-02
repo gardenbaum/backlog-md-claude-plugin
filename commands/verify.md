@@ -13,9 +13,12 @@ If there is no single active task, say so and stop.
 **Dispatch the `backlog-verifier` agent** with the task id. It maps each
 criterion to evidence and returns a verdict table. It never ticks a box.
 
-**If the dispatch fails, retry it once and no more.** Read
-`${CLAUDE_PLUGIN_ROOT}/agents/backlog-verifier.md`, gather that evidence
-inline in this session, and build the same table — saying that the agent was
+**If the dispatch fails, read what it says.** A rejection that names what the
+call is missing — a field, an array, a shape — is about the call, not the
+agent: fix it and send it again. An unknown agent, no subagent support, or the
+same rejection twice ends it — read
+`${CLAUDE_PLUGIN_ROOT}/agents/backlog-verifier.md`, gather that evidence inline
+in this session, and build the same table — saying that the agent was
 unavailable. Every gate below still applies; a table you wrote yourself is not
 a licence to check a box without asking.
 

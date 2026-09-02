@@ -31,6 +31,22 @@ function sessionId(ctx) {
 function hasSessionManager(ctx) {
   return typeof ctx?.sessionManager?.getSessionId === "function";
 }
+
+/**
+ * Whether this session is the one that left the active task open: it named
+ * that task in a tool call, or it edited files nothing has written down yet.
+ *
+ * @param {string | undefined} cwd
+ * @param {string} sessionId
+ * @param {string} taskId
+ * @returns {boolean}
+ */
+function touchedTask(cwd, sessionId, taskId) {
+  const project = findProject(cwd || process.cwd());
+  if (!project) return false;
+  const derived = deriveSession(project.root, sessionId);
+  return derived.taskId?.toLowerCase() === taskId.toLowerCase() || derived.pendingModifiedFiles.length > 0;
+}
 /**
  * @param {string} customType
  * @param {import("@oh-my-pi/pi-coding-agent").CustomMessageContent} content
@@ -436,7 +452,12 @@ export default function backlogMdExtension(
     const id = sessionId(ctx);
     try {
       const active = await resolveActiveTask({ cwd: ctx.cwd });
-      if ("task" in active) {
+      // Only a session that worked on the open task left it open. A sibling
+      // session that recorded nothing shut down one minute before the session
+      // doing the work finished its task, and counted the whole project's
+      // state against itself: `unfinishedSessions: 1` next to an empty
+      // `toolCalls` (BCC-8, measured in edgemaker).
+      if ("task" in active && touchedTask(ctx.cwd, id, active.task.id)) {
         recordSessionMetric({ cwd: ctx.cwd, sessionId: id, name: "unfinished-session" });
       }
       await spawnFlush({

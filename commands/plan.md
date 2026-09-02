@@ -14,7 +14,10 @@ so and stop. `/backlog-md:next` picks one; guessing does not.
 **Dispatch the `backlog-planner` agent** with the task id. It researches and
 returns a plan. It does not write it.
 
-**If the dispatch fails, retry it once and no more.** Read
+**If the dispatch fails, read what it says.** A rejection that names what the
+call is missing — a field, an array, a shape — is about the call, not the
+agent: fix it and send it again. An unknown agent, no subagent support, or the
+same rejection twice ends it — read
 `${CLAUDE_PLUGIN_ROOT}/agents/backlog-planner.md`, do that research inline in
 this session, and carry on to checkpoint 2 — saying that the agent was
 unavailable.

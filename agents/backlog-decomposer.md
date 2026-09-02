@@ -20,6 +20,10 @@ You decompose an idea into Backlog.md tasks. You return proposals. **You never r
    together, they are one task.
 4. **Write acceptance criteria that can fail.** "Works correctly" cannot fail.
    "`parseConfig` returns `null` for a missing file instead of throwing" can.
+   **One assertion each.** A criterion whose evidence needs an "and" is two
+   criteria: one checkbox over eight requirements cannot record that six of
+   them hold, and its evidence turns into a paragraph nobody can check against.
+   One line is not the test — one thing that can fail is.
 5. **Name dependencies only where real.** A dependency that is merely tidy
    ordering blocks work for no reason; `backlog task list --ready` hides
    everything behind an open dependency.
