@@ -1,7 +1,9 @@
 import { IN_PROGRESS } from "../lib/active-task.mjs";
 import { taskList, taskView } from "../lib/backlog.mjs";
+import { appendEvent, deriveSession } from "../lib/cache.mjs";
 import { recordSessionMetric, recordTaskIdentity } from "../lib/integration.mjs";
 import { findNext } from "../lib/next.mjs";
+import { findProject } from "../lib/paths.mjs";
 import { run } from "../lib/proc.mjs";
 import { renderNext } from "../lib/render.mjs";
 
@@ -73,6 +75,32 @@ function replaceEvidence(notes, index, line) {
 
 function evidencePrefix(index) {
   return `Evidence for acceptance criterion #${index}: `;
+}
+
+/**
+ * The 1-based indices of criteria that carry more than one assertion.
+ *
+ * One checkbox over several requirements cannot record that some of them hold,
+ * and the one that fails is the one that gets waved through: a criterion
+ * reading "3-5 inhaltliche Hauptabschnitte" was ticked over a post with six,
+ * and another asserted a title image "liegt unter public/images/posts/" while
+ * excusing its absence in the same sentence (BCC-9, measured in edgemaker).
+ * The decomposer prompt has asked for one assertion each since 0.3.8; that run
+ * had it and returned six compound criteria out of nine anyway. This is the
+ * same sentence where the criteria are actually written.
+ *
+ * Parentheticals are dropped first: "(nicht engineering, nicht gesellschaft)"
+ * clarifies one assertion rather than adding three.
+ *
+ * @param {string[]} criteria
+ * @returns {number[]}
+ */
+function compoundCriteria(criteria) {
+  return criteria.flatMap((text, i) => {
+    const bare = String(text).replace(/\([^)]*\)/g, "");
+    const joins = /\s(?:und|and|sowie)\s/i.test(bare) || bare.includes(";");
+    return joins || (bare.match(/,/g) || []).length >= 3 ? [i + 1] : [];
+  });
 }
 
 async function startTask(id, ctx) {
@@ -234,7 +262,7 @@ export function registerBacklogTools(pi) {
         // A failed read appends. Losing the check to a lookup that did not
         // answer would be the worse half of the trade.
         const replaced = before.ok ? replaceEvidence(before.task.implementationNotes, index, line) : null;
-        return mutate(
+        const result = await mutate(
           [
             "task",
             "edit",
@@ -244,6 +272,24 @@ export function registerBacklogTools(pi) {
             String(index),
           ],
           ctx,
+        );
+        if (result.isError) return result;
+        // The criterion, beside the claim, at the moment the box is ticked.
+        // "Updated task EDG-1" was the entire answer nine times in one run, and
+        // one of those nine ticked "3-5 inhaltliche Hauptabschnitte" over a post
+        // with six sections — the six counted in its own evidence (BCC-9,
+        // measured in edgemaker). Nothing extra is read for this: the view above
+        // is already made for the evidence.
+        const criterion = before.ok
+          ? (before.task.acceptanceCriteria || []).find((entry) => entry.index === index)
+          : null;
+        if (!criterion) return result;
+        return textResult(
+          `${result.content[0].text}\n\nChecked #${index} against: ${criterion.text}\n` +
+            "If the evidence does not meet that as written, the tick is wrong: undo it with " +
+            `backlog task edit ${id} --uncheck-ac ${index}, then correct the criterion or the work.`,
+          false,
+          result.details,
         );
       },
     }),
@@ -282,7 +328,30 @@ export function registerBacklogTools(pi) {
             true,
           );
         }
-        return mutate(["task", "edit", id, "-s", "Done", "--final-summary", summary], ctx);
+        // What the session actually touched, from the journal that records
+        // every edit anyway. `--modified-file` has been in the CLI all along;
+        // without it a finished task named the one file it changed inside a
+        // prose sentence of evidence, and nowhere a reader can list (BCC-9).
+        // The notes event afterwards is what keeps a second task finished in
+        // the same session from inheriting these same files.
+        const project = findProject(ctx.cwd || process.cwd());
+        const session = contextSessionId(ctx);
+        const files = project ? deriveSession(project.root, session).pendingModifiedFiles : [];
+        const result = await mutate(
+          [
+            "task",
+            "edit",
+            id,
+            "-s",
+            "Done",
+            "--final-summary",
+            summary,
+            ...files.flatMap((file) => ["--modified-file", file]),
+          ],
+          ctx,
+        );
+        if (!result.isError && project && files.length > 0) appendEvent(project.root, session, { t: "notes" });
+        return result;
       },
     }),
   );
@@ -329,7 +398,7 @@ export function registerBacklogTools(pi) {
         }
         const milestone = requiredString(params, "milestone");
         const parent = requiredString(params, "parent");
-        return mutate(
+        const result = await mutate(
           [
             "task",
             "create",
@@ -342,6 +411,18 @@ export function registerBacklogTools(pi) {
             ...(parent ? ["-p", parent] : []),
           ],
           ctx,
+        );
+        if (result.isError) return result;
+        const compound = compoundCriteria(params.acceptanceCriteria);
+        if (compound.length === 0) return result;
+        return textResult(
+          `${result.content[0].text}\n\nCriteria ${compound.map((n) => `#${n}`).join(", ")} carry more than one ` +
+            'assertion. A criterion whose evidence needs an "and" cannot record that half of it holds, and the ' +
+            "half that fails is the half that gets waved through. Split them now, while nothing has been measured " +
+            "against them: backlog task edit <id> --remove-ac <n> --ac '<one assertion>' --ac '<the other>'. " +
+            "Removing renumbers every criterion after it, so work from the highest index down.",
+          false,
+          result.details,
         );
       },
     }),

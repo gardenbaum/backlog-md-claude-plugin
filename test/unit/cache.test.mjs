@@ -251,6 +251,16 @@ test("deriveSession: editsAtLastNotes counts only edits before the last notes ev
   assert.equal(derived.editsAtLastNotes, 2, "only the two edits before the notes event count");
 });
 
+test("deriveSession: notes clear the pending files, a later edit makes one pending again", () => {
+  const root = repo();
+  appendEvent(root, "s", { t: "edit", p: "a" });
+  appendEvent(root, "s", { t: "edit", p: "b" });
+  appendEvent(root, "s", { t: "notes" });
+  assert.deepEqual(deriveSession(root, "s").pendingModifiedFiles, [], "notes say what changed; nothing is pending");
+  appendEvent(root, "s", { t: "edit", p: "a" });
+  assert.deepEqual(deriveSession(root, "s").pendingModifiedFiles, ["a"], "changed again since it was written down");
+});
+
 test("deriveSession: stale is true once a stale event is observed and no identity has re-derived it", () => {
   const root = repo();
   appendEvent(root, "s", { t: "stale" });

@@ -509,6 +509,98 @@ test("a task with an unchecked criterion cannot be finished", async (t) => {
   assert.equal(task.finalSummary ?? "", "");
 });
 
+// Nine ticks in one run and "Updated task EDG-1" was the whole answer to every
+// one of them. One of the nine checked "3-5 inhaltliche Hauptabschnitte"
+// against a post with six sections, counting the six in its own evidence
+// (BCC-9, edgemaker).
+test("a checked criterion comes back with its own text and the way to undo it", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-echo-criterion");
+  const id = await project.createTask("Echo me", ["--ac", "The post has 3-5 main sections"]);
+
+  const checked = await pi.tools
+    .get("backlog_check_ac")
+    .execute("call-1", { taskId: id, index: 1, evidence: "counted six main sections" }, undefined, undefined, ctx);
+  assert.equal(checked.isError, undefined, checked.content[0].text);
+  assert.match(checked.content[0].text, /The post has 3-5 main sections/, "the criterion belongs beside the claim");
+  assert.match(checked.content[0].text, /--uncheck-ac 1/, "the correction has to be named where the tick happened");
+});
+
+// The decomposer prompt has asked for one assertion per criterion since 0.3.8.
+// The run that had it returned six compound criteria out of nine, one of them
+// asserting a title image "liegt unter public/images/posts/" while excusing its
+// absence in the same sentence (BCC-9, edgemaker).
+test("criteria carrying more than one assertion are named at creation, single ones are not", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-compound-criteria");
+  const create = (call, title, acceptanceCriteria) =>
+    pi.tools
+      .get("backlog_task_create")
+      .execute(
+        call,
+        { title, description: "Created by the contract test.", acceptanceCriteria },
+        undefined,
+        undefined,
+        ctx,
+      );
+
+  const compound = await create("call-1", "Compound", [
+    "The file exists and is valid Markdoc.",
+    "register is business (not engineering, not gesellschaft, not beobachtung).",
+    "The frontmatter carries title, description, status, register, topics, image.",
+  ]);
+  assert.equal(compound.isError, undefined, compound.content[0].text);
+  const named = compound.content[0].text.match(/Criteria (#\d+(?:, #\d+)*) carry/);
+  assert.ok(named, compound.content[0].text);
+  assert.equal(named[1], "#1, #3", "a parenthesised clarification is not a second assertion");
+  assert.match(compound.content[0].text, /--remove-ac/, "splitting them has to be one command away");
+
+  const single = await create("call-2", "Single", [
+    "backlog_check_ac returns the criterion it checked.",
+    "The build exits zero.",
+  ]);
+  assert.equal(single.isError, undefined, single.content[0].text);
+  assert.doesNotMatch(single.content[0].text, /more than one assertion/, "one assertion each stays quiet");
+});
+
+// The journal knew the file all along and `--modified-file` has been in the CLI
+// all along: a finished task named the one file it changed inside a prose
+// sentence of evidence and nowhere a reader can list (BCC-9, edgemaker).
+test("a finished task records the files the session edited and takes them with it", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-modified-files");
+  appendEvent(project.root, "omp-modified-files", { t: "edit", p: "src/content/posts/one.mdoc" });
+  appendEvent(project.root, "omp-modified-files", { t: "edit", p: "src/lib/two.mjs" });
+  const id = await project.createTask("Record what changed", ["--ac", "It is done"]);
+  await pi.tools
+    .get("backlog_check_ac")
+    .execute("call-1", { taskId: id, index: 1, evidence: "the contract test" }, undefined, undefined, ctx);
+
+  const finished = await pi.tools
+    .get("backlog_task_finish")
+    .execute("call-2", { taskId: id, summary: "Done through the native tool." }, undefined, undefined, ctx);
+  assert.equal(finished.isError, undefined, finished.content[0].text);
+  const task = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task;
+  assert.deepEqual(task.modifiedFiles, ["src/content/posts/one.mdoc", "src/lib/two.mjs"]);
+  assert.deepEqual(
+    deriveSession(project.root, "omp-modified-files").pendingModifiedFiles,
+    [],
+    "the next task finished in this session must not inherit these files",
+  );
+});
+
 test("every file command has a native OMP registration", () => {
   const fileCommands = readdirSync(join(root, "commands"), { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))

@@ -6,13 +6,16 @@ argument-hint: <idea>
 The idea is: `$ARGUMENTS`. If that is empty, ask what to decompose and stop.
 
 **Dispatch the `backlog-decomposer` agent** with the idea and the repository
-path, verbatim and nothing else. Do not survey the backlog or the code first,
-and do not tell it what to propose or how many tasks to return: finding
-duplicates and sizing the work are the first two things its own prompt has it
-do, and a briefing turns checkpoint 1 into a review of your own guess — one
-that dictated its acceptance criteria got back a criterion no measurement
-could fail. It reads a lot of code, which is why it has its own context
-window.
+path, verbatim and nothing else. That dispatch is this command's first tool
+call: no `ls`, no `find`, no `grep`, no `backlog task list` before it, and
+nothing appended to the idea — no file layout, no schema fields, no
+constraints, no restatement of the agent's own job. Finding duplicates and
+sizing the work are the first two things its own prompt has it do, and a
+briefing turns checkpoint 1 into a review of your own guess: one run spent ten
+orientation commands on the context window this agent has its own of, then
+told it which schema fields the collection has, and got back an acceptance
+criterion that was a checklist of exactly those fields. Another that dictated
+the criteria got back one no measurement could fail.
 
 **If the dispatch fails, read what it says.** A rejection that names what the
 call is missing — a field, an array, a shape — is about the call, not the
@@ -25,9 +28,13 @@ unavailable. A decomposition done here is worth more than a dispatch that never
 lands.
 
 **When it returns — this is checkpoint 1.** Present its proposals to the user
-as a short list: title, one line of intent, the acceptance criteria count, and
-the milestone if it named one. Show the duplicates it found first if there are
-any; an idea that is already tracked ends here.
+as a short list: title, one line of intent, and the milestone if it named one.
+Write the acceptance criteria out in full when there are three tasks or fewer;
+above that, their count. They are what the work will be measured against, and a
+criterion carrying two assertions is invisible in a count — one run approved
+"9 acceptance criteria" unseen, and one of those nine, "3-5 inhaltliche
+Hauptabschnitte", was later ticked over a post with six. Show the duplicates it
+found first if there are any; an idea that is already tracked ends here.
 
 **Wait for approval.** Then create only what was approved, one call per task,
 in dependency order so every dependency names an id that already exists:

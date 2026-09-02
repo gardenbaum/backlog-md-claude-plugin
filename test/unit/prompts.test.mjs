@@ -291,13 +291,32 @@ test("decompose creates through the native tool, with the CLI form as its fallba
 // was started after the work and never planned (BCC-7).
 test("decompose dispatches without a briefing and ends before the implementation", () => {
   const text = read(join("commands", "decompose.md"));
-  assert.match(text, /verbatim and nothing else/);
-  assert.match(text, /Do not survey the backlog or the code first/);
-  assert.match(text, /do not tell it what to propose/);
+  const flat = text.replace(/\s+/g, " ");
+  assert.match(flat, /verbatim and nothing else/);
+  // "Do not survey the backlog or the code first" was in this file for the run
+  // that opened with ten orientation commands. Naming them is the difference
+  // between a rule about a category and a rule about `ls` (BCC-9).
+  assert.match(flat, /this command's first tool call/);
+  for (const command of ["`ls`", "`find`", "`grep`", "`backlog task list`"]) {
+    assert.ok(flat.includes(`no ${command}`), `decompose.md never rules out ${command} before the dispatch`);
+  }
+  assert.match(flat, /nothing appended to the idea/);
 
   const endsAt = text.indexOf("Creating them is where this command ends");
   assert.ok(endsAt >= 0, "decompose.md never says where it ends");
   assert.ok(text.slice(endsAt).includes("/backlog-md:start"), "the exit must name the command that implements");
+});
+
+// The user approved "9 acceptance criteria" without seeing one of them, and
+// the one that read "3-5 inhaltliche Hauptabschnitte" was later ticked over a
+// post with six sections (BCC-9, edgemaker).
+test("checkpoint 1 shows the criteria themselves, not how many there are", () => {
+  const flat = read(join("commands", "decompose.md")).replace(/\s+/g, " ");
+  const checkpointAt = flat.indexOf("this is checkpoint 1");
+  assert.ok(checkpointAt >= 0, "decompose.md never names checkpoint 1");
+  const checkpoint = flat.slice(checkpointAt, checkpointAt + 700);
+  assert.match(checkpoint, /criteria out in full/, "checkpoint 1 must spell the criteria out");
+  assert.match(checkpoint, /three tasks or fewer/, "the threshold that keeps a large decomposition readable");
 });
 
 // The review checkpoint: the gate sentence must precede the write it guards.
