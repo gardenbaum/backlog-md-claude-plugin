@@ -22,6 +22,37 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.8 — 2026-09-02
+
+The second clean run, and what it recorded wrongly. A `/backlog-md:decompose`
+in the same repository went the way 0.3.7 asked — a plan before the work, the
+idea dispatched verbatim, the edited file found again at the end — and still
+left contradictory evidence in the task, a counter against a session that did
+nothing, and one criterion no checkbox could hold.
+
+- `backlog_check_ac` replaces the evidence already recorded for a criterion
+  instead of appending a second block. A run measured twice, corrected itself,
+  and left both readings in the task: "description = 304 characters, violates
+  the 1–300 limit" and, three paragraphs later, "245 characters (OK)", with
+  nothing to say which one counts.
+- `unfinished-session` is recorded only for a session that worked on the task
+  still open. A sibling session shut down one minute before the working session
+  finished, and counted the whole project's state against itself:
+  `unfinishedSessions: 1` beside an empty `toolCalls`.
+- The decomposer is asked for one assertion per criterion, not one criterion
+  per line. It returned a single criterion carrying eight requirements — a
+  checkbox that cannot record that six of them hold, and evidence that runs to
+  a paragraph.
+- `/backlog-md:decompose`, `/backlog-md:plan` and `/backlog-md:verify` tell a
+  rejected call shape apart from an agent that is not there. "Retry once and no
+  more" was written for a host without subagents; one host turned the dispatch
+  down three times over the shape of the arguments and accepted the fourth,
+  which the old ceiling would have abandoned for nothing.
+- The quoting rule no longer fires on the contract rule's own example.
+  `alwaysApply` carries `backlog task edit <id> -s` into every prompt and the
+  condition matched its placeholder, so the rule announced itself in runs that
+  wrote no command at all.
+
 ## 0.3.7 — 2026-09-01
 
 What a run that went right still failed to record. A `/backlog-md:decompose`
