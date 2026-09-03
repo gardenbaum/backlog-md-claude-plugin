@@ -22,6 +22,35 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.12 — 2026-09-03
+
+The run that finished a task naming a file it had never touched. EDG-4 changed
+one post, thirteen times, and went Done recording `eu-ai-act-readiness.mdoc` —
+a file from a dead session, swept there by a rule that wrote every abandoned
+journal onto whichever task happened to be In Progress. Its own thirteen edits
+were gone by then: the pending list was cleared by `notes`, and any prose
+`--append-notes` writes that event, so six of them mid-task emptied the list
+before the finish that needed it. The two are separated now. `notes` still
+feeds the turn-end guard; a new `recorded` event, written only where the paths
+actually reach `--modified-file`, is the one thing that clears the list. And a
+dead session's files go to the task that session named, with the active task
+left as the fallback for a journal that never named one.
+
+A plan step arrived as `[[[[[["Alle 33 ACs …"]]]]]]` and was stored with all
+twelve brackets: the unwrap added in 0.3.11 looks for an array of strings, and
+the outer array's one element is an array. It flattens now.
+
+Three things the run explained away rather than acted on. The create count line
+said 32 where 33 were approved, and the answer was that the plugin must have
+deduplicated — it does not, and both count lines now say so. Checkpoint 1 asks
+for the criteria in full and got four themed lines for a single task's
+thirty-three, with a compound criterion and a missing one hidden inside them;
+in full now means one line per criterion. And `/backlog-md:setup`, faced with
+hooks already installed and nothing to offer, built a four-option menu and told
+the user `--shared` "affects only your clone" — the opposite of what the same
+command says two sentences later. Hooks already installed now means say so and
+stop.
+
 ## 0.3.11 — 2026-09-03
 
 The run that lost the specification it had just been given. Thirteen acceptance
