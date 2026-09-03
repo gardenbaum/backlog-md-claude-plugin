@@ -24,10 +24,27 @@ The task to start is `$ARGUMENTS`. If that is empty, ask which task and stop.
 - If the state is `none` or the id matches what is already active, proceed:
   skip the status change (if needed) and go straight to the brief.
 
-**Then set the status and read the brief:**
+**Then set the status.** Use the native tool when it is available:
+
+`backlog_task_start` with the task id.
+
+It is not a wrapper around the CLI line below. It says so when the task has no
+implementation plan, it names every other task still In Progress, and it
+records both in this session's journal. Setting the status through the shell
+records none of it: one session started a task with no plan, wrote the whole
+implementation and finished, and the plugin's own measurements called it a
+clean run because the only counter that would have said otherwise is written
+by the tool that was never called.
+
+Only if that tool is absent:
 
 ```bash
 backlog task edit $ARGUMENTS -s "In Progress"
+```
+
+**Then read the brief:**
+
+```bash
 "${BACKLOG_MD_NODE:-node}" "${CLAUDE_PLUGIN_ROOT}/scripts/backlog-cc.mjs" brief $ARGUMENTS
 ```
 

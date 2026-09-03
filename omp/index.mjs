@@ -4,6 +4,7 @@ import { COMMAND_NAMES, loadCommandTemplate, renderCommandTemplate } from "../li
 import { resolveActiveTask } from "../lib/active-task.mjs";
 import { createRuntimeFailureState, deriveSession } from "../lib/cache.mjs";
 import {
+  advisoryForToolCall,
   evaluateToolGuard,
   promptContext,
   recordSessionMetric,
@@ -281,6 +282,10 @@ export default function backlogMdExtension(
         sessionId: sessionId(ctx),
       });
       if (!result) {
+        const advisory = advisoryForToolCall({ cwd: ctx.cwd, toolName: event.toolName, toolInput: event.input });
+        if (advisory) {
+          pi.sendMessage(contextMessage("backlog-md.criteria-warning", notice(advisory)), { deliverAs: "nextTurn" });
+        }
         clearFailure("tool guard", ctx, startedAt);
         return;
       }

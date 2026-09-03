@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readHookInput, emitAdditionalContext, emitPermissionDecision, guard } from "../lib/protocol.mjs";
-import { evaluateToolGuard } from "../lib/integration.mjs";
+import { advisoryForToolCall, evaluateToolGuard } from "../lib/integration.mjs";
 import { notice } from "../lib/render.mjs";
 
 // The plugin's only deny. Nothing becomes impossible, one thing becomes
@@ -18,7 +18,16 @@ guard(
       guard: process.env.BACKLOG_MD_GUARD,
       sessionId: input.session_id,
     });
-    if (!result) return;
+    if (!result) {
+      // Nothing to refuse, which is not the same as nothing to say.
+      const advisory = advisoryForToolCall({
+        cwd: input.cwd,
+        toolName: input.tool_name,
+        toolInput: input.tool_input,
+      });
+      if (advisory) emitAdditionalContext("PreToolUse", notice(advisory));
+      return;
+    }
 
     if (!result.block) {
       emitAdditionalContext("PreToolUse", notice(`Warning, not blocked (BACKLOG_MD_GUARD=0):\n\n${result.reason}`));

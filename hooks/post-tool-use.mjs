@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readHookInput, guard } from "../lib/protocol.mjs";
-import { recordToolActivity } from "../lib/integration.mjs";
+import { failedToolResponse, recordToolActivity } from "../lib/integration.mjs";
 
 // Emits nothing: the tool has already run. Remembers what happened and stays
 // cheap — it fires on every edit, so it never spawns the backlog CLI.
@@ -17,7 +17,10 @@ guard(
       toolName: input.tool_name,
       toolInput: input.tool_input,
       toolDetails: input.tool_response,
-      isError: false,
+      // `false` was hard-coded here, so a command the CLI rejected counted as
+      // one that had run (BCC-10). OMP's `tool_result` has always passed the
+      // real flag; this is the same reading for Claude Code's payload.
+      isError: failedToolResponse(input.tool_response),
     });
   },
   { event: "PostToolUse" },

@@ -5,7 +5,7 @@ alwaysApply: true
 
 The Backlog.md task is the work unit and its files belong to the Backlog tools.
 They supersede the Backlog.md CLI instructions; do not read `backlog instructions`.
-Follow this order: `backlog_next`, `backlog_task_start`, `backlog_task_plan`, work, `backlog_check_ac` with named evidence for every criterion, then `backlog_task_finish`.
+Follow this order: `backlog_next`, `backlog_task_start`, `backlog_task_plan`, work, `backlog_check_ac` with evidence for every criterion, `/backlog-md:verify`, then `backlog_task_finish`.
 If no task covers the request, create one with `backlog_task_create` first, naming any task it waits for.
 The built-in todo list organises the steps inside a task; it does not replace the task.
 Never mutate a task through file tools or a handwritten shell command when a Backlog tool exists.

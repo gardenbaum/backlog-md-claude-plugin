@@ -1,6 +1,7 @@
 import { IN_PROGRESS } from "../lib/active-task.mjs";
 import { taskList, taskView } from "../lib/backlog.mjs";
 import { appendEvent, deriveSession } from "../lib/cache.mjs";
+import { compoundCriteria, compoundNotice } from "../lib/criteria.mjs";
 import { recordSessionMetric, recordTaskIdentity } from "../lib/integration.mjs";
 import { findNext } from "../lib/next.mjs";
 import { findProject } from "../lib/paths.mjs";
@@ -12,6 +13,7 @@ export const BACKLOG_TOOL_NAMES = [
   "backlog_task_start",
   "backlog_task_plan",
   "backlog_check_ac",
+  "backlog_edit_ac",
   "backlog_task_finish",
   "backlog_task_create",
 ];
@@ -75,32 +77,6 @@ function replaceEvidence(notes, index, line) {
 
 function evidencePrefix(index) {
   return `Evidence for acceptance criterion #${index}: `;
-}
-
-/**
- * The 1-based indices of criteria that carry more than one assertion.
- *
- * One checkbox over several requirements cannot record that some of them hold,
- * and the one that fails is the one that gets waved through: a criterion
- * reading "3-5 inhaltliche Hauptabschnitte" was ticked over a post with six,
- * and another asserted a title image "liegt unter public/images/posts/" while
- * excusing its absence in the same sentence (BCC-9, measured in edgemaker).
- * The decomposer prompt has asked for one assertion each since 0.3.8; that run
- * had it and returned six compound criteria out of nine anyway. This is the
- * same sentence where the criteria are actually written.
- *
- * Parentheticals are dropped first: "(nicht engineering, nicht gesellschaft)"
- * clarifies one assertion rather than adding three.
- *
- * @param {string[]} criteria
- * @returns {number[]}
- */
-function compoundCriteria(criteria) {
-  return criteria.flatMap((text, i) => {
-    const bare = String(text).replace(/\([^)]*\)/g, "");
-    const joins = /\s(?:und|and|sowie)\s/i.test(bare) || bare.includes(";");
-    return joins || (bare.match(/,/g) || []).length >= 3 ? [i + 1] : [];
-  });
 }
 
 async function startTask(id, ctx) {
@@ -255,10 +231,23 @@ export function registerBacklogTools(pi) {
         if (!id || !index || !evidence) {
           return textResult("taskId, a positive index, and named evidence are required.", true);
         }
+        const before = await taskView(id, { cwd: ctx.cwd });
+        // The criterion, beside the claim, in the file and not only in this
+        // answer. The evidence paragraph is keyed by index, and every
+        // `--remove-ac` and `--clear-ac` renumbers the list underneath it: one
+        // run rebuilt its criteria twice while an evidence paragraph for #1 was
+        // already recorded, and nothing in the task would have shown the
+        // mismatch (BCC-10). With the criterion quoted next to the evidence, a
+        // renumbering is visible to the next reader instead of silent.
+        const criterion = before.ok
+          ? (before.task.acceptanceCriteria || []).find((entry) => entry.index === index)
+          : null;
         // One paragraph, always: a blank line inside the evidence would split
         // the block that `replaceEvidence` has to find again on a re-check.
-        const line = evidencePrefix(index) + evidence.trim().replace(/\n[ \t]*\n+/g, "\n");
-        const before = await taskView(id, { cwd: ctx.cwd });
+        const line =
+          evidencePrefix(index) +
+          (criterion ? `"${criterion.text.trim()}" — ` : "") +
+          evidence.trim().replace(/\n[ \t]*\n+/g, "\n");
         // A failed read appends. Losing the check to a lookup that did not
         // answer would be the worse half of the trade.
         const replaced = before.ok ? replaceEvidence(before.task.implementationNotes, index, line) : null;
@@ -278,11 +267,7 @@ export function registerBacklogTools(pi) {
         // "Updated task EDG-1" was the entire answer nine times in one run, and
         // one of those nine ticked "3-5 inhaltliche Hauptabschnitte" over a post
         // with six sections — the six counted in its own evidence (BCC-9,
-        // measured in edgemaker). Nothing extra is read for this: the view above
-        // is already made for the evidence.
-        const criterion = before.ok
-          ? (before.task.acceptanceCriteria || []).find((entry) => entry.index === index)
-          : null;
+        // measured in edgemaker).
         if (!criterion) return result;
         return textResult(
           `${result.content[0].text}\n\nChecked #${index} against: ${criterion.text}\n` +
@@ -291,6 +276,147 @@ export function registerBacklogTools(pi) {
           false,
           result.details,
         );
+      },
+    }),
+  );
+  pi.registerTool(
+    taskTool({
+      name: "backlog_edit_ac",
+      label: "Edit Backlog criteria",
+      description: "Add, remove, or replace a Backlog.md task's acceptance criteria in one call.",
+      parameters: {
+        ...emptyObject,
+        properties: {
+          taskId,
+          add: {
+            type: "array",
+            items: nonEmptyText,
+            description: "Criteria to append. They land at the end of the list, never in a removed one's place.",
+          },
+          remove: {
+            type: "array",
+            items: { type: "integer", minimum: 1 },
+            description: "One-based indices to remove, all resolved against the list as it is now.",
+          },
+          criteria: {
+            type: "array",
+            items: nonEmptyText,
+            description:
+              "The complete new list, in order. Replaces every criterion; cannot be combined with add or remove.",
+          },
+        },
+        required: ["taskId"],
+      },
+      execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+        const id = requiredString(params, "taskId");
+        if (!id) return textResult("taskId is required.", true);
+        const texts = (value) =>
+          Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === "string" && entry.trim())
+            ? value.map((entry) => entry.trim())
+            : null;
+        const add = texts(params?.add);
+        const criteria = texts(params?.criteria);
+        const remove = Array.isArray(params?.remove) ? params.remove : [];
+        if (!remove.every((index) => Number.isInteger(index) && index > 0)) {
+          return textResult("Every remove entry must be a positive one-based index.", true);
+        }
+        if (params?.add && !add) return textResult("Every add entry must be a non-empty criterion.", true);
+        if (params?.criteria && !criteria) return textResult("Every criteria entry must be a non-empty string.", true);
+        if (criteria && (add || remove.length > 0)) {
+          return textResult(
+            "criteria replaces the whole list, so it cannot be combined with add or remove — the CLI refuses " +
+              "the same combination. Pass the complete list you want, or use add and remove together.",
+            true,
+          );
+        }
+        if (!criteria && !add && remove.length === 0) {
+          return textResult("Pass add, remove, or criteria — there is nothing to change otherwise.", true);
+        }
+        const before = await taskView(id, { cwd: ctx.cwd });
+        const previous = before.ok ? before.task.acceptanceCriteria || [] : [];
+
+        if (!criteria) {
+          // One process, one lock. The same split issued as `--remove-ac` and
+          // two `--ac` calls in a batch failed with "is being modified by
+          // another process" (BCC-10) — and repeated `--remove-ac` in a single
+          // call resolves every index against the original list, so the
+          // highest-index-down dance is not needed here either (verified on
+          // 1.50.1).
+          const result = await mutate(
+            [
+              "task",
+              "edit",
+              id,
+              ...remove.flatMap((index) => ["--remove-ac", String(index)]),
+              ...(add ?? []).flatMap((criterion) => ["--ac", criterion]),
+            ],
+            ctx,
+          );
+          if (result.isError) return result;
+          const notes = [];
+          if (add) {
+            const kept = previous.length - remove.length;
+            const compound = compoundCriteria(add);
+            if (compound.length > 0) {
+              notes.push(
+                compoundNotice(
+                  compound.map((n) => (kept > 0 ? kept + n : n)),
+                  { id },
+                ),
+              );
+            }
+            if (remove.length > 0 && kept > 0) {
+              notes.push(
+                `Added criteria are appended, so they are now #${kept + 1}${add.length > 1 ? `-#${kept + add.length}` : ""} ` +
+                  "rather than in the place of what was removed. Pass the whole list as `criteria` if that order matters.",
+              );
+            }
+          }
+          return notes.length === 0
+            ? result
+            : textResult([result.content[0].text, ...notes].join("\n\n"), false, result.details);
+        }
+
+        // Replacement clears every checkmark and cannot be combined with
+        // `--check-ac` in the same call (the CLI refuses it), so the ticks are
+        // restored in a second call. A run rebuilt its list this way through
+        // the shell and silently lost the one criterion it had already checked
+        // with evidence (BCC-10). Matched on text: a criterion whose wording
+        // changed is a different claim and has to be measured again.
+        const checkedBefore = previous.filter((entry) => entry.checked).map((entry) => entry.text.trim());
+        const result = await mutate(
+          ["task", "edit", id, ...criteria.flatMap((criterion) => ["--acceptance-criteria", criterion])],
+          ctx,
+        );
+        if (result.isError) return result;
+        const restore = criteria.flatMap((text, i) => (checkedBefore.includes(text) ? [i + 1] : []));
+        const dropped = checkedBefore.filter((text) => !criteria.includes(text));
+        const restored =
+          restore.length > 0
+            ? await mutate(["task", "edit", id, ...restore.flatMap((index) => ["--check-ac", String(index)])], ctx)
+            : null;
+        const notes = [];
+        if (restore.length > 0) {
+          notes.push(
+            restored?.isError
+              ? `The replacement landed, but restoring the checkmarks on ${restore.map((n) => `#${n}`).join(", ")} failed: ` +
+                  `${restored.content[0].text} Re-check them with backlog_check_ac and the evidence already recorded.`
+              : `Checkmarks restored on ${restore.map((n) => `#${n}`).join(", ")} — the criteria whose text is unchanged.`,
+          );
+        }
+        if (dropped.length > 0) {
+          notes.push(
+            `${dropped.length} checked criteri${dropped.length === 1 ? "on is" : "a are"} not in the new list and ` +
+              `${dropped.length === 1 ? "its evidence is" : "their evidence is"} now unattached: ` +
+              `${dropped.map((text) => `"${text}"`).join(", ")}. Evidence paragraphs in the implementation notes are ` +
+              "keyed by index, so re-read the notes against the new numbering before checking anything else.",
+          );
+        }
+        const compound = compoundCriteria(criteria);
+        if (compound.length > 0) notes.push(compoundNotice(compound, { id }));
+        return notes.length === 0
+          ? result
+          : textResult([result.content[0].text, ...notes].join("\n\n"), false, result.details);
       },
     }),
   );
@@ -336,7 +462,8 @@ export function registerBacklogTools(pi) {
         // the same session from inheriting these same files.
         const project = findProject(ctx.cwd || process.cwd());
         const session = contextSessionId(ctx);
-        const files = project ? deriveSession(project.root, session).pendingModifiedFiles : [];
+        const derived = project ? deriveSession(project.root, session) : null;
+        const files = derived?.pendingModifiedFiles ?? [];
         const result = await mutate(
           [
             "task",
@@ -350,8 +477,26 @@ export function registerBacklogTools(pi) {
           ],
           ctx,
         );
-        if (!result.isError && project && files.length > 0) appendEvent(project.root, session, { t: "notes" });
-        return result;
+        if (result.isError) return result;
+        if (project && files.length > 0) appendEvent(project.root, session, { t: "notes" });
+        // Every box on this task was ticked by the session that did the work.
+        // That is the ordinary case and not a fault, but it is also the whole
+        // of the evidence: `/backlog-md:finish` opens with the verifier for
+        // this reason, and a session that reaches Done through this tool has
+        // skipped it — one wrote a whole post, ticked fifteen criteria of its
+        // own and finished, with "ausschließlich aus Business-Perspektive"
+        // resting on nothing but its own reading (BCC-10). Named, not refused:
+        // an independent check is a decision for the person, and refusing here
+        // would leave a finished task unclosable in a session without agents.
+        if ((derived?.metrics.acceptanceChecks ?? 0) === 0) return result;
+        return textResult(
+          `${result.content[0].text}\n\n${id} is Done, and this session checked its own criteria — nothing ` +
+            "independent has read them. `/backlog-md:verify` dispatches the `backlog-verifier` agent against the " +
+            "evidence in the task and can still uncheck what does not hold; a criterion it rejects means this task " +
+            "goes back, not that the box was close enough.",
+          false,
+          result.details,
+        );
       },
     }),
   );
@@ -415,12 +560,11 @@ export function registerBacklogTools(pi) {
         if (result.isError) return result;
         const compound = compoundCriteria(params.acceptanceCriteria);
         if (compound.length === 0) return result;
+        // The id the CLI just assigned, so the split it asks for is a command
+        // that can be run rather than one to fill in first.
+        const created = /Created task ([A-Za-z0-9][A-Za-z0-9_-]*)/.exec(result.content[0].text);
         return textResult(
-          `${result.content[0].text}\n\nCriteria ${compound.map((n) => `#${n}`).join(", ")} carry more than one ` +
-            'assertion. A criterion whose evidence needs an "and" cannot record that half of it holds, and the ' +
-            "half that fails is the half that gets waved through. Split them now, while nothing has been measured " +
-            "against them: backlog task edit <id> --remove-ac <n> --ac '<one assertion>' --ac '<the other>'. " +
-            "Removing renumbers every criterion after it, so work from the highest index down.",
+          `${result.content[0].text}\n\n${compoundNotice(compound, { id: created?.[1] ?? "<id>" })}`,
           false,
           result.details,
         );

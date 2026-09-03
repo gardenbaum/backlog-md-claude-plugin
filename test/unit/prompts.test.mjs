@@ -62,7 +62,7 @@ test("the always-applied contract rule stays under 1000 bytes", () => {
 
 // Verbatim, not paraphrased. A paraphrase is how the three hazards turn into
 // two.
-test("the skill carries all three quoting rules verbatim", () => {
+test("the skill carries every quoting rule verbatim", () => {
   const text = read(join("skills", "backlog-workflow", "SKILL.md"));
   for (const rule of QUOTING_RULES) assert.ok(text.includes(rule), `missing rule: ${rule}`);
 });
@@ -119,7 +119,7 @@ test("every agent can read, search and run commands", () => {
   }
 });
 
-test("every agent carries all three quoting rules verbatim", () => {
+test("every agent carries every quoting rule verbatim", () => {
   for (const name of AGENTS) {
     const text = read(agentPath(name));
     for (const rule of QUOTING_RULES) assert.ok(text.includes(rule), `${name}: missing rule: ${rule}`);
@@ -365,4 +365,46 @@ test("every command that mutates a task resolves the active one before it writes
     assert.ok(activeAt < writeAt, `${name}: writes before it resolves the task`);
     assert.match(text, /\bstop\b/i, `${name}: no stop condition when the task is unresolved`);
   }
+});
+
+// Setting the status through the shell records none of what the tool records:
+// a run started a task with no plan, wrote the implementation and finished, and
+// `unplannedStarts` stayed 0 because the only counter that would have said
+// otherwise is written by `backlog_task_start` (BCC-10, edgemaker).
+test("start prefers the native tool and keeps the CLI as its fallback", () => {
+  const text = read(join("commands", "start.md"));
+  const nativeAt = text.indexOf("backlog_task_start");
+  const cliAt = text.indexOf('-s "In Progress"');
+  assert.ok(nativeAt >= 0, "start.md never names backlog_task_start");
+  assert.ok(cliAt >= 0, "start.md must keep the CLI form for hosts without the native tools");
+  assert.ok(nativeAt < cliAt, "the CLI form must follow the native tool, as its fallback");
+  assert.match(text.replace(/\s+/g, " "), /Only if that tool is absent/);
+});
+
+test("finish reaches Done through the native tool, with the CLI as its fallback", () => {
+  const text = read(join("commands", "finish.md"));
+  const nativeAt = text.indexOf("backlog_task_finish");
+  const cliAt = text.indexOf('-s "Done"');
+  assert.ok(nativeAt >= 0, "finish.md never names backlog_task_finish");
+  assert.ok(cliAt >= 0, "finish.md must keep the CLI form");
+  assert.ok(nativeAt < cliAt, "the CLI form must follow the native tool, as its fallback");
+});
+
+// Two doors to Done, and the tool is the one an agent reaches first. The
+// contract rule sends it through the verifier on the way (BCC-10).
+test("the contract rule puts verification between the checks and Done", () => {
+  const body = frontmatter(read(join("rules", "backlog-md-contract.md"))).body.replace(/\s+/g, " ");
+  const verifyAt = body.indexOf("/backlog-md:verify");
+  const finishAt = body.indexOf("backlog_task_finish");
+  assert.ok(verifyAt >= 0, "the contract never names the verify step");
+  assert.ok(verifyAt < finishAt, "verification has to come before the tool that sets Done");
+});
+
+// The prompt has asked for one assertion per criterion since 0.3.8. The run
+// that had that wording returned four compound criteria out of ten, so it now
+// has to read its own output back before returning it (BCC-10).
+test("the decomposer re-reads its own criteria before it returns them", () => {
+  const body = frontmatter(read(agentPath("backlog-decomposer"))).body.replace(/\s+/g, " ");
+  assert.match(body, /Re-read your own criteria before you return them/i);
+  assert.match(body, /semicolon/i, "the self-check has to name what it is looking for");
 });

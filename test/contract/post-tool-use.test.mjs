@@ -202,3 +202,22 @@ test("N concurrent invocations each record their own edit — none are lost to a
     `expected all ${N} distinct paths to be recorded, got ${derived.pendingModifiedFiles.length}`,
   );
 });
+
+// A `backlog task edit` rejected by Backlog.md's per-task lock changed nothing,
+// and twelve of them in one run were each recorded as a mutation that had
+// landed, marking the cache stale twelve times over (BCC-10, edgemaker).
+test("a backlog command that failed is not recorded as a mutation", async () => {
+  const root = project();
+  const payload = (session_id, tool_response) => ({
+    session_id,
+    cwd: root,
+    tool_name: "Bash",
+    tool_input: { command: "backlog task edit BCC-1 --ac 'one'" },
+    tool_response,
+  });
+  await feed(payload("s-failed", { exitCode: 1, stderr: "is being modified by another process" }), root);
+  assert.equal(deriveSession(root, "s-failed").stale, false, "a rejected command mutated nothing");
+
+  await feed(payload("s-ok", { exitCode: 0, stdout: "Updated task BCC-1" }), root);
+  assert.equal(deriveSession(root, "s-ok").stale, true, "a command that ran still marks the cache stale");
+});

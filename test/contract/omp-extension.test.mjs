@@ -140,6 +140,7 @@ test("native Backlog tools are essential, inactive by default, and require accep
 
   const names = [
     "backlog_check_ac",
+    "backlog_edit_ac",
     "backlog_next",
     "backlog_task_create",
     "backlog_task_finish",
@@ -389,7 +390,15 @@ test("re-checking a criterion replaces its evidence instead of stacking a second
   assert.match(notes, /245 characters, inside the limit/);
   assert.doesNotMatch(notes, /304 characters/, "the correction has to replace what it corrects");
   assert.equal(notes.split("Evidence for acceptance criterion #1: ").length - 1, 1, "one block per criterion");
-  assert.match(notes, /Evidence for acceptance criterion #2: the file is on disk/, "other criteria are untouched");
+  assert.match(
+    notes,
+    /Evidence for acceptance criterion #2: "The file is there" — the file is on disk/,
+    "other criteria are untouched",
+  );
+  // The paragraph is keyed by index and every removal renumbers the list under
+  // it, so the criterion it was written for is quoted beside the evidence
+  // (BCC-10).
+  assert.match(notes, /Evidence for acceptance criterion #1: "The count is right" — measured again/);
 });
 
 // A decomposition is a dependency graph. Without these three the native path
@@ -1169,4 +1178,132 @@ test("a summary the shutdown cannot write is reported apart from the worker that
     if (previousNode === undefined) delete process.env.BACKLOG_MD_NODE;
     else process.env.BACKLOG_MD_NODE = previousNode;
   }
+});
+
+// The split that BCC-9's warning asks for had no native path, so it went
+// through the shell: `--remove-ac` and two `--ac` calls issued as one batch,
+// where Backlog.md's per-task lock rejected two of the three (BCC-10,
+// edgemaker). One call, one lock, and the indices resolved against the list as
+// it stands rather than counted backwards by the caller.
+test("criteria are split in a single call, and the checkmarks of untouched criteria survive", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-edit-ac");
+  const id = await project.createTask("Split me", [
+    "--ac",
+    "The file exists",
+    "--ac",
+    "The build passes and the tests pass",
+    "--ac",
+    "The docs mention it",
+  ]);
+  await project.cli(["task", "edit", id, "--check-ac", "1"]);
+
+  const split = await pi.tools
+    .get("backlog_edit_ac")
+    .execute(
+      "call-split",
+      { taskId: id, remove: [2], add: ["The build passes", "The tests pass"] },
+      undefined,
+      undefined,
+      ctx,
+    );
+  assert.equal(split.isError, undefined, split.content[0].text);
+  const after = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task.acceptanceCriteria;
+  assert.deepEqual(
+    after.map((c) => c.text),
+    ["The file exists", "The docs mention it", "The build passes", "The tests pass"],
+  );
+  assert.equal(after[0].checked, true, "an untouched criterion keeps its checkmark");
+  assert.match(split.content[0].text, /appended/i, "the caller has to be told the order changed");
+});
+
+test("a compound criterion added through the native tool is named with the index it landed on", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-edit-ac-compound");
+  const id = await project.createTask("Warn me", ["--ac", "The file exists"]);
+  const added = await pi.tools
+    .get("backlog_edit_ac")
+    .execute("call-add", { taskId: id, add: ["The path is right; the file comes later"] }, undefined, undefined, ctx);
+  assert.equal(added.isError, undefined, added.content[0].text);
+  assert.match(added.content[0].text, /Criteria #2 carry more than one assertion/);
+});
+
+// A run rebuilt its whole list through `--clear-ac` plus `--acceptance-criteria`
+// twice, and silently lost the one criterion it had already checked with
+// evidence. The CLI refuses to combine a replacement with `--check-ac`, so the
+// restoration is a second call the tool makes and the shell path does not
+// (BCC-10, verified against 1.50.1).
+test("a full replacement restores the checkmarks of criteria whose text is unchanged", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-edit-ac-replace");
+  const id = await project.createTask("Reorder me", ["--ac", "First", "--ac", "Second", "--ac", "Third"]);
+  await project.cli(["task", "edit", id, "--check-ac", "1", "--check-ac", "2", "--check-ac", "3"]);
+
+  const replaced = await pi.tools
+    .get("backlog_edit_ac")
+    .execute("call-replace", { taskId: id, criteria: ["First", "Third", "Renamed"] }, undefined, undefined, ctx);
+  assert.equal(replaced.isError, undefined, replaced.content[0].text);
+  const after = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task.acceptanceCriteria;
+  assert.deepEqual(
+    after.map((c) => [c.text, c.checked]),
+    [
+      ["First", true],
+      ["Third", true],
+      ["Renamed", false],
+    ],
+  );
+  assert.match(replaced.content[0].text, /Checkmarks restored on #1, #2/);
+  assert.match(replaced.content[0].text, /"Second"/, "a dropped checkmark has to be named, not swallowed");
+});
+
+test("a replacement cannot be combined with an incremental edit, the way the CLI refuses it", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-edit-ac-refuse");
+  const id = await project.createTask("Refuse me", ["--ac", "First"]);
+  const both = await pi.tools
+    .get("backlog_edit_ac")
+    .execute("call-both", { taskId: id, criteria: ["a"], add: ["b"] }, undefined, undefined, ctx);
+  assert.equal(both.isError, true);
+  const nothing = await pi.tools
+    .get("backlog_edit_ac")
+    .execute("call-nothing", { taskId: id }, undefined, undefined, ctx);
+  assert.equal(nothing.isError, true, "a call that changes nothing is a mistake, not a no-op");
+});
+
+// The session that ticks the boxes is the session that asks whether they are
+// ticked. `/backlog-md:finish` opens with the verifier for that reason, and a
+// task finished through the tool alone has skipped it (BCC-10, edgemaker).
+test("finishing a task this session checked itself names the verifier", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-self-checked");
+  const id = await project.createTask("Self-checked", ["--ac", "The tests pass"]);
+  await pi.tools
+    .get("backlog_check_ac")
+    .execute("call-check", { taskId: id, index: 1, evidence: "npm test exits 0" }, undefined, undefined, ctx);
+  const finished = await pi.tools
+    .get("backlog_task_finish")
+    .execute("call-finish", { taskId: id, summary: "Done." }, undefined, undefined, ctx);
+  assert.equal(finished.isError, undefined, finished.content[0].text);
+  assert.match(finished.content[0].text, /\/backlog-md:verify/);
+  assert.match(finished.content[0].text, /this session checked its own criteria/);
 });

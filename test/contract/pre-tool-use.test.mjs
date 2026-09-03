@@ -253,3 +253,39 @@ test("every other shell command passes the Bash matcher untouched", async () => 
     assert.equal(r.stdout.trim(), "", command);
   }
 });
+
+// The compound-criterion check used to live inside `backlog_task_create`, so it
+// only ever saw a task's first draft. Criteria are rewritten far more often
+// than they are created, and the rewrites go through the shell (BCC-10).
+test("a compound criterion written through the shell is warned about, not blocked", async () => {
+  const root = project();
+  const result = await feed(
+    {
+      session_id: "s-criteria",
+      cwd: root,
+      tool_name: "Bash",
+      tool_input: { command: "backlog task edit BACK-12 --ac 'Der Pfad stimmt; die Datei kommt spaeter.'" },
+    },
+    root,
+  );
+  assert.equal(result.code, 0);
+  const output = parseHookOutput(result, "pre-tool-use");
+  assert.equal(output.hookSpecificOutput.permissionDecision, undefined, "a wording is the author's call, never a deny");
+  assert.match(output.hookSpecificOutput.additionalContext, /more than one assertion/);
+  assert.match(output.hookSpecificOutput.additionalContext, /backlog_edit_ac \{ taskId: "BACK-12"/);
+});
+
+test("an atomic criterion written through the shell passes in silence", async () => {
+  const root = project();
+  const result = await feed(
+    {
+      session_id: "s-atomic",
+      cwd: root,
+      tool_name: "Bash",
+      tool_input: { command: "backlog task edit BACK-12 --ac 'Die Datei existiert.'" },
+    },
+    root,
+  );
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), "");
+});

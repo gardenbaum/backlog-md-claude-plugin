@@ -40,21 +40,28 @@ Check only the ones that do:
 backlog task edit TASK-12 --check-dod 2
 ```
 
-**3. Final summary.** Write what changed and why, in the task, not in the chat.
-One call per line:
+**3. Final summary and status.** Only after 1–2. Write what changed and why, in
+the task, not in the chat.
+
+Use `backlog_task_finish` with the task id and the summary when it is
+available: it writes the summary, sets Done, and records the files this session
+edited as the task's modified files — the CLI form below records none of those,
+so the one file a task changed ends up named only inside a prose sentence.
+
+Only if that tool is absent, one call per line and the status last:
 
 ```bash
 backlog task edit TASK-12 --append-final-summary 'Replaced the inline parser with lib/parse.mjs.'
 backlog task edit TASK-12 --append-final-summary 'Behaviour unchanged; adds a regression test for the missing-file case.'
-```
-
-**4. Status.** Only after 1–3:
-
-```bash
 backlog task edit TASK-12 -s "Done"
 ```
 
-**5. Propose the commit.** Show the message and wait for approval; do not
+Reaching Done through `backlog_task_finish` without step 1 is the shortcut this
+command exists to prevent: the tool checks that the boxes are ticked, and the
+session that ticked them is the one asking. It says so when it notices, and
+that note is a reason to run `/backlog-md:verify` afterwards, not a receipt.
+
+**4. Propose the commit.** Show the message and wait for approval; do not
 commit unasked. If the git hooks are installed, `prepare-commit-msg` adds the
 `Task: <id>` trailer itself — you do not need to write one by hand. (Writing
 one yourself does not duplicate it: the hook detects an existing trailer and

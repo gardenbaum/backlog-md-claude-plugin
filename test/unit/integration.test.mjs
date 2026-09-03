@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnFlush } from "../../lib/integration.mjs";
+import { advisoryForToolCall, failedToolResponse, spawnFlush } from "../../lib/integration.mjs";
 
 const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -63,4 +63,41 @@ test("a failed summary is reported apart from the worker that would clear it", a
 
   assert.deepEqual(seen.errors, []);
   assert.equal(seen.summaries.length, 1);
+});
+
+// The create-time check only ever saw a task's first draft. A run split four
+// compound criteria by hand and wrote a fifth compound one on the way, through
+// `backlog task edit --ac`, where nothing was looking (BCC-10, edgemaker).
+test("a shell command that writes a compound criterion is warned about before it runs", () => {
+  const cwd = projectDir();
+  const advisory = advisoryForToolCall({
+    cwd,
+    toolName: "Bash",
+    toolInput: { command: "backlog task edit EDG-2 --ac 'Der Pfad folgt der Konvention; die Datei kommt spaeter.'" },
+  });
+  assert.ok(advisory, "no warning for a criterion carrying two assertions");
+  assert.match(advisory, /One of the criteria in this command carries/);
+  assert.match(advisory, /backlog_edit_ac \{ taskId: "EDG-2"/, "the warning must name the task it is about");
+});
+
+test("nothing is said about an atomic criterion, a read, or a command outside a project", () => {
+  const cwd = projectDir();
+  const atomic = { command: "backlog task edit EDG-2 --ac 'Die Datei existiert.'" };
+  assert.equal(advisoryForToolCall({ cwd, toolName: "Bash", toolInput: atomic }), null);
+  assert.equal(advisoryForToolCall({ cwd, toolName: "Bash", toolInput: { command: "backlog task list" } }), null);
+  assert.equal(advisoryForToolCall({ cwd, toolName: "Read", toolInput: { file_path: "x" } }), null);
+  const outside = mkdtempSync(join(tmpdir(), "bcc-nonproject-"));
+  const compound = { command: "backlog task edit EDG-2 --ac 'a and b'" };
+  assert.equal(advisoryForToolCall({ cwd: outside, toolName: "Bash", toolInput: compound }), null);
+});
+
+// Twelve rejected `backlog task edit` calls were recorded as mutations that had
+// happened, because the Claude Code hook hard-coded `isError: false` (BCC-10).
+test("a tool response is read as failed only on evidence, never on a guess", () => {
+  for (const response of [{ is_error: true }, { isError: true }, { success: false }, { exitCode: 1 }, { code: 2 }]) {
+    assert.equal(failedToolResponse(response), true, JSON.stringify(response));
+  }
+  for (const response of [{ exitCode: 0 }, { stdout: "Updated task BCC-1" }, {}, undefined, "text", null]) {
+    assert.equal(failedToolResponse(response), false, JSON.stringify(response));
+  }
 });
