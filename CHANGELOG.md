@@ -22,6 +22,39 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.11 — 2026-09-03
+
+The run that lost the specification it had just been given. Thirteen acceptance
+criteria reached `backlog_task_create` as a single string holding the whole list
+as JSON; the task was created with one of them, and "Created task EDG-3" is what
+a create that writes thirteen says too. The plan arrived the same way one call
+later and was stored with its brackets intact. Both are recovered now — a
+one-element array whose single string parses as an array of strings is unwrapped
+before use — and both tools say how much they wrote, so a list that does not
+survive the trip is visible in the answer rather than four calls later in the
+file.
+
+The same run then skipped its only independent check. The note that
+`backlog_task_finish` ends on read as a path: the session ran
+`scripts/backlog-verify.mjs`, got `MODULE_NOT_FOUND`, and concluded the verifier
+was gone from this version — then finished on thirty-five criteria it had
+checked itself. The note now says the slash command is a slash command, and that
+nothing under `scripts/` answers to that name. It also names any unchecked
+definition-of-done item, which no other tool reads, and says that the files it
+recorded are recorded and not committed.
+
+Smaller, from the same run: a display-only basename in an edit result no longer
+becomes a second modified file, because a recorded path now has to exist on disk
+— one task named its single changed file twice. The compound-criteria notice
+says "Criterion #1 carries" when there is one of them, and says that a bound is
+one assertion however many numbers it names: the check reads "und" as a join, so
+a run split "mindestens 80 und höchstens 200 Zeichen" into two criteria and
+measured the same string twice. `/backlog-md:decompose` and `/backlog-md:verify`
+say what belongs in a context field a host demands — the idea, or the task id,
+and nothing else. One run answered a required `context` field with the
+repository layout and the agent's own opening steps, which is the briefing the
+paragraph above it rules out.
+
 ## 0.3.10 — 2026-09-03
 
 The run where the fix from 0.3.9 fired, was obeyed, and left the task worse for
