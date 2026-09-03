@@ -22,6 +22,51 @@ When installing in both Claude Code and OMP, keep the marketplace name
 different marketplace names create separate IDs and leave both installations
 active instead of allowing OMP's replacement rule to apply.
 
+## 0.3.10 — 2026-09-03
+
+The run where the fix from 0.3.9 fired, was obeyed, and left the task worse for
+it. `backlog_task_create` named four compound criteria out of ten and the
+session split them — by hand, because nothing edits criteria. Twelve of those
+calls were rejected by Backlog.md's per-task lock, one rebuild cleared the
+checkmark on a criterion that already had its evidence, and the split wrote a
+fifth compound criterion where the check no longer looks: `--ac 'Der Pfad …
+folgt der Konvention …; die Datei selbst wird später ausserhalb dieser Aufgabe
+befuellt'`, a path asserted and a missing file excused in one sentence. It was
+ticked.
+
+- `backlog_edit_ac` removes and adds acceptance criteria in a single call, so
+  one lock is taken where a batch took three and lost two. Repeated
+  `--remove-ac` resolve against the list as it stands, so no one counts
+  backwards. Passing the whole list as `criteria` re-checks the criteria whose
+  text is unchanged and names the checkmarks it cannot keep — the CLI refuses
+  `--acceptance-criteria` together with `--check-ac`, so through the shell that
+  rebuild always costs every tick on the task.
+- The compound-criterion check moved out of `backlog_task_create` and now also
+  runs before a shell command that writes criteria. It only ever saw a task's
+  first draft, and criteria are rewritten far more often than they are created.
+  A warning, never a refusal: how a criterion is worded is the author's call.
+- `backlog_check_ac` writes the criterion into the evidence line. That
+  paragraph is keyed by index, and every `--remove-ac` renumbers the list
+  underneath it.
+- `/backlog-md:start` reaches for `backlog_task_start` and `/backlog-md:finish`
+  for `backlog_task_finish`, each keeping its CLI form as the fallback. The
+  shell path records no unplanned start and no modified files: that run started
+  a task with no plan, wrote the whole implementation, and the plugin's own
+  counters called it clean.
+- `backlog_task_finish` says so when the session checked its own criteria, and
+  the contract rule now puts `/backlog-md:verify` between the checks and Done.
+  Two doors to Done, and the one an agent reaches first skipped the verifier.
+- The Claude Code `PostToolUse` hook no longer records a rejected command as a
+  mutation. `isError: false` was hard-coded there, so twelve failures marked
+  the cache stale twelve times.
+- Quoting rule 1 names `--append-plan`, `--append-notes` and
+  `--append-final-summary` rather than globbing at them. One run read
+  "repeated `--append-*` flags" and guessed `--append-ac`, which does not
+  exist. A fourth rule states the per-task lock and the error it produces.
+- The `backlog-decomposer` re-reads its own criteria before returning them. It
+  has asked for one assertion each since 0.3.8, and returned four compound out
+  of ten.
+
 ## 0.3.9 — 2026-09-02
 
 The run where every fix from 0.3.8 held and a checkbox still lied. The third
