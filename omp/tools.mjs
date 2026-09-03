@@ -133,8 +133,8 @@ function requiredString(params, name) {
  * criterion is not.
  *
  * Only a one-element array is unwrapped, and only when the element parses as an
- * array of non-empty strings: a criterion that merely starts with `[` parses as
- * nothing and is returned as itself.
+ * array whose leaves are all non-empty strings: a criterion that merely starts
+ * with `[` parses as nothing and is returned as itself.
  *
  * @param {unknown} value
  * @returns {string[] | null} the strings, or null when the shape is not a list of them
@@ -148,14 +148,23 @@ export function stringList(value) {
   return unwrapped(trimmed[0]) ?? trimmed;
 }
 
-/** @param {string} text @returns {string[] | null} */
+/**
+ * Flattened, because the nesting a host wraps a list in is not the list's
+ * shape: one run sent a single plan step as `[[[[[["Alle 33 ACs …"]]]]]]` and
+ * it was stored with all twelve brackets, since the outer array's one element
+ * is an array rather than the string this looked for (BCC-12).
+ *
+ * @param {string} text @returns {string[] | null}
+ */
 function unwrapped(text) {
   if (!text.startsWith("[") || !text.endsWith("]")) return null;
   try {
     const parsed = JSON.parse(text);
-    if (!Array.isArray(parsed) || parsed.length === 0) return null;
-    if (!parsed.every((entry) => typeof entry === "string" && entry.trim())) return null;
-    return parsed.map((entry) => entry.trim());
+    if (!Array.isArray(parsed)) return null;
+    const leaves = parsed.flat(Number.POSITIVE_INFINITY);
+    if (leaves.length === 0) return null;
+    if (!leaves.every((entry) => typeof entry === "string" && entry.trim())) return null;
+    return leaves.map((entry) => entry.trim());
   } catch {
     return null;
   }
@@ -270,8 +279,10 @@ export function registerBacklogTools(pi) {
         // the same whether six steps were appended or one holding all six
         // (BCC-11).
         return textResult(
-          `${result.content[0].text}\n\nAppended ${countOf(steps, "plan step")} to ${id}. If that is fewer than you ` +
-            "sent, the rest did not arrive — re-send them rather than working from a plan the task does not have.",
+          `${result.content[0].text}\n\nAppended ${countOf(steps, "plan step")} to ${id}. Backlog.md appends every ` +
+            "step it is given and drops none, so if that is fewer than you sent, the rest did not arrive — re-send " +
+            "them rather than working from a plan the task does not have. A number that matches what you sent is " +
+            "this call reporting success, not a warning.",
           false,
           result.details,
         );
@@ -522,8 +533,10 @@ export function registerBacklogTools(pi) {
         // every edit anyway. `--modified-file` has been in the CLI all along;
         // without it a finished task named the one file it changed inside a
         // prose sentence of evidence, and nowhere a reader can list (BCC-9).
-        // The notes event afterwards is what keeps a second task finished in
-        // the same session from inheriting these same files.
+        // The `recorded` event afterwards is what keeps a second task finished
+        // in the same session from inheriting these same files — recorded, not
+        // merely written about, since prose notes leave `--modified-file`
+        // untouched and used to clear the list all the same (BCC-12).
         const project = findProject(ctx.cwd || process.cwd());
         const session = contextSessionId(ctx);
         const derived = project ? deriveSession(project.root, session) : null;
@@ -542,7 +555,7 @@ export function registerBacklogTools(pi) {
           ctx,
         );
         if (result.isError) return result;
-        if (project && files.length > 0) appendEvent(project.root, session, { t: "notes" });
+        if (project && files.length > 0) appendEvent(project.root, session, { t: "recorded" });
         const notes = [];
         // Every box on this task was ticked by the session that did the work.
         // That is the ordinary case and not a fault, but it is also the whole
@@ -656,7 +669,9 @@ export function registerBacklogTools(pi) {
         // the file back four calls later (BCC-11, measured in edgemaker).
         const written =
           `Wrote ${countOf(criteria, "acceptance criterion", "acceptance criteria")} to this task. ` +
-          "If that is fewer than you sent, the rest never arrived — add them before any of this is measured.";
+          "Backlog.md writes every criterion it is given — it does not merge duplicates and does not drop any — so " +
+          "if that is fewer than you sent, the rest never arrived. Add them before any of this is measured, and do " +
+          "not explain the difference away.";
         const compound = compoundCriteria(criteria);
         if (compound.length === 0) {
           return textResult(`${result.content[0].text}\n\n${written}`, false, result.details);

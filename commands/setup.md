@@ -14,7 +14,13 @@ Present the output in two parts, and **write nothing without asking first**:
 
 2. **The git hooks.** Explain what each does in one line — `prepare-commit-msg`
    appends a `Task: <id>` trailer and never fails a commit; `pre-commit`
-   rejects a staged task file the CLI can no longer read. Then ask whether to
+   rejects a staged task file the CLI can no longer read. If the diagnosis
+   already reports them installed, there is nothing to offer: say they are
+   installed, name the copy of the plugin they run, and stop. Do not build a
+   menu out of the flags below to have something to ask — one run offered four
+   options for hooks that were already in place and told the user `--shared`
+   "affects only your clone, not teammates", which is the opposite of what this
+   command says two sentences down. Otherwise ask whether to
    install. Only if they agree, run the command shown. `--shared` changes
    behaviour for everyone who clones the repository, so name that difference
    before offering it. If the install is skipped because `core.hooksPath`

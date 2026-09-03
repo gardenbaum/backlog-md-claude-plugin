@@ -39,8 +39,16 @@ Write the acceptance criteria out in full when there are three tasks or fewer;
 above that, their count. They are what the work will be measured against, and a
 criterion carrying two assertions is invisible in a count — one run approved
 "9 acceptance criteria" unseen, and one of those nine, "3-5 inhaltliche
-Hauptabschnitte", was later ticked over a post with six. Show the duplicates it
-found first if there are any; an idea that is already tracked ends here.
+Hauptabschnitte", was later ticked over a post with six. In full means one line
+per criterion in the words it will be measured in. Grouping them by theme is a
+count with more words in it and does not satisfy this: one run answered a
+single task's thirty-three criteria with four lines — "Frontmatter (12): title,
+description 1–300 Zeichen, …" — got approval on the spot, and had both a
+compound criterion and a criterion that never arrived inside those four lines.
+A long list is the honest cost of thirty-three criteria; if it reads as too
+long to show, that is the decomposition to question, not the display. Show the
+duplicates it found first if there are any; an idea that is already tracked
+ends here.
 
 **Wait for approval.** Then create only what was approved, one call per task,
 in dependency order so every dependency names an id that already exists:

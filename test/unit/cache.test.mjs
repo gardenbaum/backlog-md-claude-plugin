@@ -251,14 +251,27 @@ test("deriveSession: editsAtLastNotes counts only edits before the last notes ev
   assert.equal(derived.editsAtLastNotes, 2, "only the two edits before the notes event count");
 });
 
-test("deriveSession: notes clear the pending files, a later edit makes one pending again", () => {
+test("deriveSession: recorded clears the pending files, a later edit makes one pending again", () => {
   const root = repo();
   appendEvent(root, "s", { t: "edit", p: "a" });
   appendEvent(root, "s", { t: "edit", p: "b" });
-  appendEvent(root, "s", { t: "notes" });
-  assert.deepEqual(deriveSession(root, "s").pendingModifiedFiles, [], "notes say what changed; nothing is pending");
+  appendEvent(root, "s", { t: "recorded" });
+  assert.deepEqual(deriveSession(root, "s").pendingModifiedFiles, [], "the paths are on the task; nothing is pending");
   appendEvent(root, "s", { t: "edit", p: "a" });
   assert.deepEqual(deriveSession(root, "s").pendingModifiedFiles, ["a"], "changed again since it was written down");
+});
+
+// Prose notes are not a record of which files changed. Six `--append-notes`
+// calls mid-task emptied this list before the finish that needed it, and the
+// task went Done naming no file it had touched (BCC-12).
+test("deriveSession: notes leave the pending files alone", () => {
+  const root = repo();
+  appendEvent(root, "s", { t: "edit", p: "a" });
+  appendEvent(root, "s", { t: "notes" });
+  appendEvent(root, "s", { t: "notes" });
+  const derived = deriveSession(root, "s");
+  assert.deepEqual(derived.pendingModifiedFiles, ["a"], "prose notes do not write --modified-file");
+  assert.equal(derived.editsAtLastNotes, 1, "the turn-end guard still sees them");
 });
 
 test("deriveSession: stale is true once a stale event is observed and no identity has re-derived it", () => {

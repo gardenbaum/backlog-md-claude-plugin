@@ -1486,3 +1486,100 @@ test("finishing says the files it recorded are not committed", async (t) => {
   assert.match(finished.content[0].text, /Recorded as modified: src\/one\.mjs/);
   assert.match(finished.content[0].text, /Recorded, not committed/);
 });
+
+// Six prose `--append-notes` calls between the edits and the finish emptied the
+// pending list, and EDG-4 went Done naming no file it had touched (BCC-12).
+// Only the write that puts the paths in `--modified-file` records them.
+test("prose notes written mid-task do not cost the finish its file list", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-notes-then-finish");
+  const id = await project.createTask("Notes before finishing", ["--ac", "It is done"]);
+  appendEvent(project.root, "omp-notes-then-finish", { t: "edit", p: "src/content/posts/one.mdoc" });
+
+  // The real path: a `backlog task edit --append-notes` seen by tool_result.
+  for (const line of ["KERNTHESE: der Parser liest zuerst", "ABGRENZUNG: nicht modell-drift"]) {
+    await pi.events.get("tool_result")(
+      { toolName: "bash", input: { command: `backlog task edit ${id} --append-notes '${line}'` }, isError: false },
+      ctx,
+    );
+  }
+  const afterNotes = deriveSession(project.root, "omp-notes-then-finish");
+  assert.ok(afterNotes.editsAtLastNotes >= 1, "the notes event must have been recorded at all");
+  assert.deepEqual(
+    afterNotes.pendingModifiedFiles,
+    ["src/content/posts/one.mdoc"],
+    "prose notes are not a record of which files changed",
+  );
+
+  await pi.tools
+    .get("backlog_check_ac")
+    .execute("call-1", { taskId: id, index: 1, evidence: "the contract test" }, undefined, undefined, ctx);
+  const finished = await pi.tools
+    .get("backlog_task_finish")
+    .execute("call-2", { taskId: id, summary: "Done after notes." }, undefined, undefined, ctx);
+  assert.equal(finished.isError, undefined, finished.content[0].text);
+  const task = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task;
+  assert.deepEqual(task.modifiedFiles, ["src/content/posts/one.mdoc"]);
+  assert.match(finished.content[0].text, /Recorded as modified/);
+});
+
+// `[[[[[["Alle 33 ACs …"]]]]]]` reached the plan tool as one step and was stored
+// with all twelve brackets: the outer array's one element is an array, not the
+// string the unwrap looked for (BCC-12).
+test("a serialised list nested in further arrays is flattened to its steps", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-nested-array");
+  const id = await project.createTask("Nested", ["--ac", "The tests pass"]);
+  const planned = await pi.tools
+    .get("backlog_task_plan")
+    .execute(
+      "call-plan",
+      { taskId: id, steps: [JSON.stringify([[[["Read it", "Write it"]]]])] },
+      undefined,
+      undefined,
+      ctx,
+    );
+  assert.equal(planned.isError, undefined, planned.content[0].text);
+  assert.match(planned.content[0].text, /Appended 2 plan steps/);
+  const plan = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task.implementationPlan;
+  assert.doesNotMatch(plan, /\[\[/, "the brackets the host wrapped it in are not part of the plan");
+  assert.match(plan, /Read it/);
+  assert.match(plan, /Write it/);
+});
+
+// The count line fired with 32 against 33 approved and the run answered it with
+// an invented rule — "eine Wiederholung wurde vom Plugin dedupliziert". The CLI
+// does neither: `--ac A --ac B --ac A` writes three criteria (BCC-12).
+test("the count line rules out the deduplication a run invented to explain it", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-no-dedup");
+  const created = await pi.tools.get("backlog_task_create").execute(
+    "call-create",
+    {
+      title: "Repeated",
+      description: "Two of these are the same sentence.",
+      acceptanceCriteria: ["The file exists", "The build passes", "The file exists"],
+    },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(created.isError, undefined, created.content[0].text);
+  assert.match(created.content[0].text, /Wrote 3 acceptance criteria/);
+  assert.match(created.content[0].text, /does not merge duplicates and does not drop any/);
+  const id = /Created task ([A-Za-z0-9-]+)/.exec(created.content[0].text)?.[1];
+  const task = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task;
+  assert.equal(task.acceptanceCriteria.length, 3, "Backlog.md keeps the repeat, so the count can be trusted");
+});

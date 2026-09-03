@@ -331,6 +331,31 @@ test("checkpoint 1 shows the criteria themselves, not how many there are", () =>
   assert.match(checkpoint, /three tasks or fewer/, "the threshold that keeps a large decomposition readable");
 });
 
+// "In full" was read as "in four themed lines": a single task's thirty-three
+// criteria were shown as "Frontmatter (12): …", approved on the spot, and both
+// a compound criterion and one that never arrived hid inside them (BCC-12).
+test("checkpoint 1 rules out grouping the criteria by theme", () => {
+  const flat = read(join("commands", "decompose.md")).replace(/\s+/g, " ");
+  assert.match(flat, /one line per criterion/, "decompose.md never says what in full means");
+  assert.match(flat, /Grouping them by theme is a count/, "a themed group must be ruled out by name");
+});
+
+// A diagnosis that already reports the hooks installed leaves nothing to
+// offer. One run built a four-option menu anyway and told the user `--shared`
+// "affects only your clone, not teammates" — the opposite of what this same
+// command says two sentences later (BCC-12).
+test("setup has nothing to offer when the hooks are already installed", () => {
+  const flat = read(join("commands", "setup.md")).replace(/\s+/g, " ");
+  const hooksAt = flat.indexOf("The git hooks");
+  assert.ok(hooksAt >= 0, "setup.md never names the git hooks step");
+  const step = flat.slice(hooksAt);
+  assert.match(step, /already reports them installed/, "setup.md never branches on hooks already installed");
+  assert.match(step, /there is nothing to offer/, "setup.md never says to stop rather than ask");
+  const stopAt = step.indexOf("there is nothing to offer");
+  const askAt = step.indexOf("ask whether to");
+  assert.ok(stopAt < askAt, "the already-installed branch must come before the offer it replaces");
+});
+
 // The review checkpoint: the gate sentence must precede the write it guards.
 test("verify's gate instructs asking and waiting before any criterion is checked", () => {
   const text = read(join("commands", "verify.md"));

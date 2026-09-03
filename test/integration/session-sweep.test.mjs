@@ -149,3 +149,83 @@ test("resuming after a killed session puts its pending files on the active task"
     p.cleanup();
   }
 });
+
+// A dead session's files belong to the task that session was working on. The
+// active task was the only rule here, and a dead session's blog post was
+// booked onto EDG-4 — the task that happened to be In Progress when the sweep
+// ran, which had never touched that file (BCC-12).
+test("a dead session's files go to the task it named, not to whatever is active now", async (t) => {
+  if (!available) return t.skip("backlog CLI not installed");
+  const p = await makeProject();
+  try {
+    const worked = await p.createTask("What the dead session worked on");
+    const active = await p.createTask("What is In Progress now");
+    await p.cli(["task", "edit", active, "-s", "In Progress"]);
+
+    appendEvent(p.root, "crashed", { t: "identity", id: worked });
+    const path = abandonedJournal(p.root, "crashed", ["src/its-own.ts"]);
+
+    const result = await sweepAbandoned({ repoRoot: p.root, sessionId: "live" });
+    assert.deepEqual(result.swept, ["crashed"], JSON.stringify(result));
+    assert.equal(existsSync(path), false);
+
+    const target = await taskView(worked, { cwd: p.root });
+    assert.deepEqual(target.task.modifiedFiles ?? [], ["src/its-own.ts"]);
+    const bystander = await taskView(active, { cwd: p.root });
+    assert.deepEqual(bystander.task.modifiedFiles ?? [], [], `${active} was written to`);
+  } finally {
+    p.cleanup();
+  }
+});
+
+// The fallback is what the sweep has always done, and it is still right for a
+// journal that never named a task: the active one is the only thing to go on.
+test("a dead session that never named a task still falls back to the active one", async (t) => {
+  if (!available) return t.skip("backlog CLI not installed");
+  const p = await makeProject();
+  try {
+    const named = await p.createTask("Named by its session");
+    const active = await p.createTask("Active fallback");
+    await p.cli(["task", "edit", active, "-s", "In Progress"]);
+
+    appendEvent(p.root, "with-identity", { t: "identity", id: named });
+    abandonedJournal(p.root, "with-identity", ["src/named.ts"]);
+    abandonedJournal(p.root, "anonymous", ["src/anonymous.ts"]);
+
+    const result = await sweepAbandoned({ repoRoot: p.root, sessionId: "live" });
+    assert.deepEqual([...result.swept].sort(), ["anonymous", "with-identity"], JSON.stringify(result));
+
+    const first = await taskView(named, { cwd: p.root });
+    assert.deepEqual(first.task.modifiedFiles ?? [], ["src/named.ts"]);
+    const second = await taskView(active, { cwd: p.root });
+    assert.deepEqual(second.task.modifiedFiles ?? [], ["src/anonymous.ts"]);
+  } finally {
+    p.cleanup();
+  }
+});
+
+// One unreachable task used to stop the whole sweep. The session that named a
+// task nobody can read keeps its journal for the next start; the one that can
+// be written lands now.
+test("a task that cannot be read holds up only the session that named it", async (t) => {
+  if (!available) return t.skip("backlog CLI not installed");
+  const p = await makeProject();
+  try {
+    const active = await p.createTask("Still writable");
+    await p.cli(["task", "edit", active, "-s", "In Progress"]);
+
+    appendEvent(p.root, "lost", { t: "identity", id: "TASK-99999" });
+    const lost = abandonedJournal(p.root, "lost", ["src/lost.ts"]);
+    abandonedJournal(p.root, "fine", ["src/fine.ts"]);
+
+    const result = await sweepAbandoned({ repoRoot: p.root, sessionId: "live" });
+    assert.deepEqual(result.swept, ["fine"], JSON.stringify(result));
+    assert.ok(result.reason, "the unreadable task should be reported");
+    assert.ok(existsSync(lost), "a journal nothing could be written from must survive");
+
+    const view = await taskView(active, { cwd: p.root });
+    assert.deepEqual(view.task.modifiedFiles ?? [], ["src/fine.ts"]);
+  } finally {
+    p.cleanup();
+  }
+});
