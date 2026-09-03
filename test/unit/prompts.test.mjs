@@ -307,6 +307,18 @@ test("decompose dispatches without a briefing and ends before the implementation
   assert.ok(text.slice(endsAt).includes("/backlog-md:start"), "the exit must name the command that implements");
 });
 
+// The host demanded a `context` field the command had never mentioned, so the
+// session filled it with the repository layout, how many entries the target
+// collection had, and the agent's own two opening steps — the briefing the
+// paragraph above rules out, let in through a required field (BCC-11).
+test("a context field the host demands takes the argument, not a briefing", () => {
+  const decompose = read(join("commands", "decompose.md")).replace(/\s+/g, " ");
+  assert.match(decompose, /A field the host demands takes the idea and the repository path, verbatim/);
+  assert.match(decompose, /required `context` field/);
+  const verify = read(join("commands", "verify.md")).replace(/\s+/g, " ");
+  assert.match(verify, /A field the host demands takes the task id and nothing else/);
+});
+
 // The user approved "9 acceptance criteria" without seeing one of them, and
 // the one that read "3-5 inhaltliche Hauptabschnitte" was later ticked over a
 // post with six sections (BCC-9, edgemaker).

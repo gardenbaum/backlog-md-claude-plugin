@@ -121,6 +121,66 @@ function requiredString(params, name) {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+/**
+ * An array parameter, with a host's serialised array unwrapped.
+ *
+ * A run reached this tool with `acceptanceCriteria` holding a single string
+ * that was the whole thirteen-item list as JSON text, and with `steps` holding
+ * the whole plan the same way. Thirteen criteria the user had just approved
+ * became one, and the plan was stored with its brackets and quotes intact
+ * (BCC-11, measured in edgemaker). The schema says `array of string`, so the
+ * host is wrong to send that — but the list is still recoverable here, and one
+ * criterion is not.
+ *
+ * Only a one-element array is unwrapped, and only when the element parses as an
+ * array of non-empty strings: a criterion that merely starts with `[` parses as
+ * nothing and is returned as itself.
+ *
+ * @param {unknown} value
+ * @returns {string[] | null} the strings, or null when the shape is not a list of them
+ */
+export function stringList(value) {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const strings = value.every((entry) => typeof entry === "string" && entry.trim());
+  if (!strings) return null;
+  const trimmed = value.map((entry) => entry.trim());
+  if (trimmed.length !== 1) return trimmed;
+  return unwrapped(trimmed[0]) ?? trimmed;
+}
+
+/** @param {string} text @returns {string[] | null} */
+function unwrapped(text) {
+  if (!text.startsWith("[") || !text.endsWith("]")) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    if (!parsed.every((entry) => typeof entry === "string" && entry.trim())) return null;
+    return parsed.map((entry) => entry.trim());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The same, for a list that may be left out entirely.
+ *
+ * An explicit empty array is a list of none, not a malformed one: every task in
+ * an empty backlog is a root task, and rejecting `dependencies: []` left no way
+ * to create the first one (BCC-6).
+ *
+ * @param {unknown} value
+ * @returns {string[] | null}
+ */
+function optionalStringList(value) {
+  if (value === undefined || (Array.isArray(value) && value.length === 0)) return [];
+  return stringList(value);
+}
+
+/** How many items were written, for a result line that would otherwise not say. */
+function countOf(items, singular, plural = `${singular}s`) {
+  return `${items.length} ${items.length === 1 ? singular : plural}`;
+}
+
 function taskTool({ name, label, description, parameters, execute }) {
   return {
     name,
@@ -202,11 +262,19 @@ export function registerBacklogTools(pi) {
       },
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
         const id = requiredString(params, "taskId");
-        const steps =
-          Array.isArray(params?.steps) && params.steps.every((step) => typeof step === "string" && step.trim());
-        return id && steps
-          ? mutate(["task", "edit", id, ...params.steps.flatMap((step) => ["--append-plan", step])], ctx)
-          : textResult("taskId and one or more non-empty steps are required.", true);
+        const steps = stringList(params?.steps);
+        if (!id || !steps) return textResult("taskId and one or more non-empty steps are required.", true);
+        const result = await mutate(["task", "edit", id, ...steps.flatMap((step) => ["--append-plan", step])], ctx);
+        if (result.isError) return result;
+        // What landed, not just that something did. "Updated task EDG-3" reads
+        // the same whether six steps were appended or one holding all six
+        // (BCC-11).
+        return textResult(
+          `${result.content[0].text}\n\nAppended ${countOf(steps, "plan step")} to ${id}. If that is fewer than you ` +
+            "sent, the rest did not arrive — re-send them rather than working from a plan the task does not have.",
+          false,
+          result.details,
+        );
       },
     }),
   );
@@ -310,12 +378,8 @@ export function registerBacklogTools(pi) {
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
         const id = requiredString(params, "taskId");
         if (!id) return textResult("taskId is required.", true);
-        const texts = (value) =>
-          Array.isArray(value) && value.length > 0 && value.every((entry) => typeof entry === "string" && entry.trim())
-            ? value.map((entry) => entry.trim())
-            : null;
-        const add = texts(params?.add);
-        const criteria = texts(params?.criteria);
+        const add = stringList(params?.add);
+        const criteria = stringList(params?.criteria);
         const remove = Array.isArray(params?.remove) ? params.remove : [];
         if (!remove.every((index) => Number.isInteger(index) && index > 0)) {
           return textResult("Every remove entry must be a positive one-based index.", true);
@@ -479,6 +543,7 @@ export function registerBacklogTools(pi) {
         );
         if (result.isError) return result;
         if (project && files.length > 0) appendEvent(project.root, session, { t: "notes" });
+        const notes = [];
         // Every box on this task was ticked by the session that did the work.
         // That is the ordinary case and not a fault, but it is also the whole
         // of the evidence: `/backlog-md:finish` opens with the verifier for
@@ -488,15 +553,44 @@ export function registerBacklogTools(pi) {
         // resting on nothing but its own reading (BCC-10). Named, not refused:
         // an independent check is a decision for the person, and refusing here
         // would leave a finished task unclosable in a session without agents.
-        if ((derived?.metrics.acceptanceChecks ?? 0) === 0) return result;
-        return textResult(
-          `${result.content[0].text}\n\n${id} is Done, and this session checked its own criteria — nothing ` +
-            "independent has read them. `/backlog-md:verify` dispatches the `backlog-verifier` agent against the " +
-            "evidence in the task and can still uncheck what does not hold; a criterion it rejects means this task " +
-            "goes back, not that the box was close enough.",
-          false,
-          result.details,
-        );
+        //
+        // Spelled out as a slash command since a run read the old wording as a
+        // path, ran `scripts/backlog-verify.mjs`, got MODULE_NOT_FOUND and
+        // concluded the verifier did not exist in this version — then finished
+        // on thirty-five criteria it had checked itself (BCC-11).
+        if ((derived?.metrics.acceptanceChecks ?? 0) > 0) {
+          notes.push(
+            `${id} is Done, and this session checked its own criteria — nothing independent has read them. Type ` +
+              "`/backlog-md:verify` as a slash command — it is not a script, and nothing under scripts/ answers to " +
+              "that name. It dispatches the `backlog-verifier` agent against the evidence in the task and can still " +
+              "uncheck what does not hold; a criterion it rejects means this task goes back, not that the box was " +
+              "close enough.",
+          );
+        }
+        // The definition of done is the half of `/backlog-md:finish` that no
+        // other tool reads, so a session that reaches Done through this call
+        // never sees it. Free here: it is in the view this tool already took.
+        const dod = (view.ok ? view.task.definitionOfDone || [] : []).filter((item) => !item.checked);
+        if (dod.length > 0) {
+          notes.push(
+            `${countOf(dod, "definition-of-done item is", "definition-of-done items are")} still unchecked: ` +
+              `${dod.map((item) => `#${item.index} ${item.text}`).join("; ")}. Backlog.md does not gate Done on ` +
+              "them. Walk each one, then check the ones that hold with backlog task edit " +
+              `${id} --check-dod <n>.`,
+          );
+        }
+        // Recorded is not committed: a finished task named its one changed file
+        // in both places the plugin writes, and the file was still untracked
+        // when the session ended (BCC-11, measured in edgemaker).
+        if (files.length > 0) {
+          notes.push(
+            `Recorded as modified: ${files.join(", ")}. Recorded, not committed — proposing the commit is the last ` +
+              "step of `/backlog-md:finish`, and it is still to do.",
+          );
+        }
+        return notes.length === 0
+          ? result
+          : textResult([result.content[0].text, ...notes].join("\n\n"), false, result.details);
       },
     }),
   );
@@ -531,14 +625,12 @@ export function registerBacklogTools(pi) {
       execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
         const title = requiredString(params, "title");
         const description = requiredString(params, "description");
-        const criteria =
-          Array.isArray(params?.acceptanceCriteria) &&
-          params.acceptanceCriteria.every((criterion) => typeof criterion === "string" && criterion.trim());
+        const criteria = stringList(params?.acceptanceCriteria);
         if (!title || !description || !criteria) {
           return textResult("title, description, and one or more acceptanceCriteria are required.", true);
         }
-        const dependencies = Array.isArray(params?.dependencies) ? params.dependencies : [];
-        if (!dependencies.every((id) => typeof id === "string" && id.trim())) {
+        const dependencies = optionalStringList(params?.dependencies);
+        if (!dependencies) {
           return textResult("Every dependency must be a non-empty task ID.", true);
         }
         const milestone = requiredString(params, "milestone");
@@ -550,7 +642,7 @@ export function registerBacklogTools(pi) {
             title,
             "-d",
             description,
-            ...params.acceptanceCriteria.flatMap((criterion) => ["--ac", criterion]),
+            ...criteria.flatMap((criterion) => ["--ac", criterion]),
             ...dependencies.flatMap((id) => ["--dep", id]),
             ...(milestone ? ["-m", milestone] : []),
             ...(parent ? ["-p", parent] : []),
@@ -558,13 +650,22 @@ export function registerBacklogTools(pi) {
           ctx,
         );
         if (result.isError) return result;
-        const compound = compoundCriteria(params.acceptanceCriteria);
-        if (compound.length === 0) return result;
+        // A create that writes one criterion and a create that writes thirteen
+        // answer "Created task EDG-3" alike. One run had twelve of thirteen
+        // approved criteria never reach the task, and found out only by reading
+        // the file back four calls later (BCC-11, measured in edgemaker).
+        const written =
+          `Wrote ${countOf(criteria, "acceptance criterion", "acceptance criteria")} to this task. ` +
+          "If that is fewer than you sent, the rest never arrived — add them before any of this is measured.";
+        const compound = compoundCriteria(criteria);
+        if (compound.length === 0) {
+          return textResult(`${result.content[0].text}\n\n${written}`, false, result.details);
+        }
         // The id the CLI just assigned, so the split it asks for is a command
         // that can be run rather than one to fill in first.
         const created = /Created task ([A-Za-z0-9][A-Za-z0-9_-]*)/.exec(result.content[0].text);
         return textResult(
-          `${result.content[0].text}\n\n${compoundNotice(compound, { id: created?.[1] ?? "<id>" })}`,
+          [result.content[0].text, written, compoundNotice(compound, { id: created?.[1] ?? "<id>" })].join("\n\n"),
           false,
           result.details,
         );

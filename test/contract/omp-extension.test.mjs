@@ -826,6 +826,13 @@ test("OMP blocks direct Backlog edits, warns in guard-off mode, and records sour
   // Written first: an edit of a file that does not exist is a create, and gets
   // the create reason instead (BCC-6).
   writeFileSync(taskPath, "---\nid: BACK-12\n---\n");
+  // The source files these payloads name are written too: a recorded edit has
+  // to name something that is on disk, because a payload also carries labels
+  // and a label resolved against the project root looked exactly like a second
+  // modified file (BCC-11).
+  mkdirSync(join(project.root, "src"), { recursive: true });
+  writeFileSync(join(project.root, "src", "a.mjs"), "export const a = 1;\n");
+  writeFileSync(join(project.root, "src", "staged.mjs"), "export const staged = 1;\n");
   const editInput = { input: `[${taskPath}#A1B2]\nPUT >1:\n+changed` };
 
   const blocked = pi.events.get("tool_call")({ toolName: "edit", input: editInput }, ctx);
@@ -1233,7 +1240,7 @@ test("a compound criterion added through the native tool is named with the index
     .get("backlog_edit_ac")
     .execute("call-add", { taskId: id, add: ["The path is right; the file comes later"] }, undefined, undefined, ctx);
   assert.equal(added.isError, undefined, added.content[0].text);
-  assert.match(added.content[0].text, /Criteria #2 carry more than one assertion/);
+  assert.match(added.content[0].text, /Criterion #2 carries more than one assertion/);
 });
 
 // A run rebuilt its whole list through `--clear-ac` plus `--acceptance-criteria`
@@ -1306,4 +1313,176 @@ test("finishing a task this session checked itself names the verifier", async (t
   assert.equal(finished.isError, undefined, finished.content[0].text);
   assert.match(finished.content[0].text, /\/backlog-md:verify/);
   assert.match(finished.content[0].text, /this session checked its own criteria/);
+});
+
+// Thirteen approved criteria reached this tool as one string holding the whole
+// list as JSON, and the task was created with one of them. Nothing said so: the
+// answer to a create that writes one and a create that writes thirteen is the
+// same line (BCC-11, measured in edgemaker).
+test("a criteria array the host serialised into one string is unwrapped, and the count is reported", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-serialised-array");
+  const created = await pi.tools.get("backlog_task_create").execute(
+    "call-create",
+    {
+      title: "Serialised",
+      description: "The host sent the list as one string.",
+      acceptanceCriteria: [JSON.stringify(["The file exists", "The build passes", "The docs mention it"])],
+    },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(created.isError, undefined, created.content[0].text);
+  assert.match(created.content[0].text, /Wrote 3 acceptance criteria/);
+  const id = /Created task ([A-Za-z0-9-]+)/.exec(created.content[0].text)?.[1];
+  const task = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task;
+  assert.deepEqual(
+    task.acceptanceCriteria.map((entry) => entry.text),
+    ["The file exists", "The build passes", "The docs mention it"],
+  );
+});
+
+test("a plan that arrives as one serialised string is appended as its own steps", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-serialised-plan");
+  const id = await project.createTask("Plan me", ["--ac", "The tests pass"]);
+  const planned = await pi.tools
+    .get("backlog_task_plan")
+    .execute(
+      "call-plan",
+      { taskId: id, steps: [JSON.stringify(["1. Read it", "2. Write it"])] },
+      undefined,
+      undefined,
+      ctx,
+    );
+  assert.equal(planned.isError, undefined, planned.content[0].text);
+  assert.match(planned.content[0].text, /Appended 2 plan steps/);
+  const plan = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task.implementationPlan;
+  assert.match(plan, /1\. Read it/);
+  assert.match(plan, /2\. Write it/);
+  assert.doesNotMatch(plan, /\["1\. Read it"/, "the plan is steps, not the JSON that carried them");
+});
+
+// A single step is still a single step: the unwrap only fires on text that
+// actually parses as a list of strings.
+test("a lone plan step that merely looks like a list is stored as written", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-lone-step");
+  const id = await project.createTask("Plan me", ["--ac", "The tests pass"]);
+  const planned = await pi.tools
+    .get("backlog_task_plan")
+    .execute("call-plan", { taskId: id, steps: ["[WIP] rewrite the parser"] }, undefined, undefined, ctx);
+  assert.equal(planned.isError, undefined, planned.content[0].text);
+  assert.match(planned.content[0].text, /Appended 1 plan step\b/);
+  const plan = JSON.parse((await project.cli(["task", id, "--json"])).stdout).task.implementationPlan;
+  assert.match(plan, /\[WIP\] rewrite the parser/);
+});
+
+// The old wording read as a path to a run that then ran it, got
+// MODULE_NOT_FOUND, and concluded the verifier was gone (BCC-11).
+test("the verifier note says the slash command is not a script", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-verify-wording");
+  const id = await project.createTask("Self-checked", ["--ac", "The tests pass"]);
+  await pi.tools
+    .get("backlog_check_ac")
+    .execute("call-check", { taskId: id, index: 1, evidence: "npm test exits 0" }, undefined, undefined, ctx);
+  const finished = await pi.tools
+    .get("backlog_task_finish")
+    .execute("call-finish", { taskId: id, summary: "Done." }, undefined, undefined, ctx);
+  assert.equal(finished.isError, undefined, finished.content[0].text);
+  assert.match(finished.content[0].text, /it is not a script/);
+  assert.match(finished.content[0].text, /nothing under scripts\/ answers to that name/);
+});
+
+// The definition of done is the half of `/backlog-md:finish` that no other tool
+// reads, so a session that finishes through the tool alone never sees it.
+test("finishing names a definition-of-done item nobody checked", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-dod");
+  const id = await project.createTask("With a DoD", ["--ac", "The tests pass", "--dod", "The changelog is written"]);
+  await project.cli(["task", "edit", id, "--check-ac", "1"]);
+  const finished = await pi.tools
+    .get("backlog_task_finish")
+    .execute("call-finish", { taskId: id, summary: "Done." }, undefined, undefined, ctx);
+  assert.equal(finished.isError, undefined, finished.content[0].text);
+  assert.match(finished.content[0].text, /1 definition-of-done item is still unchecked/);
+  assert.match(finished.content[0].text, /The changelog is written/);
+});
+
+// OMP's edit result carries the bare filename beside the real path, for
+// display. Resolved against the project root it looked like a second file, and
+// one task was finished naming its single changed file twice — once as
+// `src/content/posts/x.mdoc`, once as `x.mdoc` (BCC-11, measured in edgemaker).
+test("a display-only basename in an edit result is not a second modified file", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-display-name");
+  mkdirSync(join(project.root, "src", "posts"), { recursive: true });
+  writeFileSync(join(project.root, "src", "posts", "one.mdoc"), "---\ntitle: One\n---\n");
+  await pi.events.get("tool_result")(
+    {
+      toolName: "write",
+      input: { path: join(project.root, "src", "posts", "one.mdoc"), content: "---\ntitle: One\n---\n" },
+      details: { file: "one.mdoc", path: join(project.root, "src", "posts", "one.mdoc") },
+      isError: false,
+    },
+    ctx,
+  );
+  assert.deepEqual(deriveSession(project.root, "omp-display-name").pendingModifiedFiles, ["src/posts/one.mdoc"]);
+});
+
+// Recorded is not committed. A task was finished naming the one file it
+// changed, in the journal and on the task, and the file was still untracked
+// when the session ended (BCC-11, measured in edgemaker).
+test("finishing says the files it recorded are not committed", async (t) => {
+  if (!(await backlogAvailable())) return t.skip("backlog not installed");
+  const project = await makeProject();
+  t.after(project.cleanup);
+  const pi = mockExtensionApi();
+  backlogMdExtension(pi);
+  const ctx = context(project.root, "omp-uncommitted");
+  mkdirSync(join(project.root, "src"), { recursive: true });
+  writeFileSync(join(project.root, "src", "one.mjs"), "export const one = 1;\n");
+  await pi.events.get("tool_result")(
+    {
+      toolName: "write",
+      input: { path: join(project.root, "src", "one.mjs"), content: "export const one = 1;\n" },
+      details: undefined,
+      isError: false,
+    },
+    ctx,
+  );
+  const id = await project.createTask("Uncommitted", ["--ac", "The tests pass"]);
+  await project.cli(["task", "edit", id, "--check-ac", "1"]);
+  const finished = await pi.tools
+    .get("backlog_task_finish")
+    .execute("call-finish", { taskId: id, summary: "Done." }, undefined, undefined, ctx);
+  assert.equal(finished.isError, undefined, finished.content[0].text);
+  assert.match(finished.content[0].text, /Recorded as modified: src\/one\.mjs/);
+  assert.match(finished.content[0].text, /Recorded, not committed/);
 });

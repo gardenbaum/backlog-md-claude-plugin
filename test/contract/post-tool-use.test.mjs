@@ -13,11 +13,15 @@ function shQuote(value) {
   return `'${String(value).split("'").join(`'\\''`)}'`;
 }
 
-function project() {
+function project(sources = ["a.ts", "b.ts"]) {
   const root = mkdtempSync(join(tmpdir(), "bcc-post-"));
   mkdirSync(join(root, "backlog", "tasks"), { recursive: true });
   writeFileSync(join(root, "backlog", "config.yml"), "\n");
   mkdirSync(join(root, "src"), { recursive: true });
+  // PostToolUse fires after the write, so the files these payloads name are on
+  // disk by the time the hook sees them. That is what tells a path apart from a
+  // display label the payload also carries (BCC-11).
+  for (const file of sources) writeFileSync(join(root, "src", file), "export const x = 1;\n");
   return root;
 }
 
@@ -123,7 +127,7 @@ test("writing notes marks the session stale AND records the edit count at that m
 // The combined case the correction exists for: a single command that both
 // writes notes and changes another task fact.
 test("a command that both writes notes and changes status marks stale and records the notes edit count", async () => {
-  const root = project();
+  const root = project(["a.ts", "b.ts", "c.ts"]);
   for (const f of ["src/a.ts", "src/b.ts", "src/c.ts"]) {
     await feed({ session_id: "s5b", cwd: root, tool_name: "Edit", tool_input: { file_path: join(root, f) } }, root);
   }
@@ -182,8 +186,8 @@ test("malformed input does not fail the hook", async () => {
 // lost between a third and two-thirds of the edits (measured: 2-4 of 6
 // landing, across repeated trials). The append-only journal must not lose any.
 test("N concurrent invocations each record their own edit — none are lost to a clobbered read-modify-write", async () => {
-  const root = project();
   const N = 6;
+  const root = project(Array.from({ length: N }, (_, i) => `f${i}.ts`));
   const runs = await Promise.all(
     Array.from({ length: N }, (_, i) =>
       feed(

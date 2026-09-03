@@ -15,7 +15,10 @@ criterion to evidence and returns a verdict table. It never ticks a box.
 
 **If the dispatch fails, read what it says.** A rejection that names what the
 call is missing — a field, an array, a shape — is about the call, not the
-agent: fix it and send it again. An unknown agent, no subagent support, or the
+agent: fix it and send it again. A field the host demands takes the task id and
+nothing else: this agent reads the task itself, and a summary of what you
+believe the evidence shows is the one thing that would make its answer
+worthless. An unknown agent, no subagent support, or the
 same rejection twice ends it — read
 `${CLAUDE_PLUGIN_ROOT}/agents/backlog-verifier.md`, gather that evidence inline
 in this session, and build the same table — saying that the agent was

@@ -20,7 +20,13 @@ the criteria got back one no measurement could fail.
 **If the dispatch fails, read what it says.** A rejection that names what the
 call is missing — a field, an array, a shape — is about the call, not the
 agent: fix it and send it again. One host turned this dispatch down three times
-over the shape of the arguments and accepted the fourth. An unknown agent, no
+over the shape of the arguments and accepted the fourth. A field the host
+demands takes the idea and the repository path, verbatim; it does not become a
+place to put what the paragraph above rules out. One run answered a required
+`context` field with a goal-and-constraints block naming the repository layout,
+how many entries the target collection already had, and that the agent should
+find duplicates first and create nothing — the two things its own prompt has it
+do, handed to it as if they were news. An unknown agent, no
 subagent support, or the same rejection twice ends it — read
 `${CLAUDE_PLUGIN_ROOT}/agents/backlog-decomposer.md`, do that research inline
 in this session, and carry on to checkpoint 1 — saying that the agent was
